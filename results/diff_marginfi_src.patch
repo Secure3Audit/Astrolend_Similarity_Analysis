@@ -1,0 +1,4195 @@
+diff --git a/results/src/constants.rs b/results/src/constants.rs
+index bacaa17..a332f1a 100755
+--- a/results/src/constants.rs
++++ b/results/src/constants.rs
+@@ -138,4 +138,4 @@ pub const TOTAL_ASSET_VALUE_INIT_LIMIT_INACTIVE: u64 = 0;
+ 
+ pub const MIN_PYTH_PUSH_VERIFICATION_LEVEL: VerificationLevel = VerificationLevel::Full;
+ pub const PYTH_PUSH_PYTH_SPONSORED_SHARD_ID: u16 = 0;
+-pub const PYTH_PUSH_MARGINFI_SPONSORED_SHARD_ID: u16 = 3301;
++pub const PYTH_PUSH_ASTROLEND_SPONSORED_SHARD_ID: u16 = 3301;
+diff --git a/results/src/errors.rs b/results/src/errors.rs
+index 1b99fc8..43a74a9 100755
+--- a/results/src/errors.rs
++++ b/results/src/errors.rs
+@@ -1,7 +1,7 @@
+ use anchor_lang::prelude::*;
+ 
+ #[error_code]
+-pub enum MarginfiError {
++pub enum AstrolendError {
+     #[msg("Math error")] // 6000
+     MathError,
+     #[msg("Invalid bank index")] // 6001
+@@ -98,8 +98,8 @@ pub enum MarginfiError {
+     T22MintRequired,
+ }
+ 
+-impl From<MarginfiError> for ProgramError {
+-    fn from(e: MarginfiError) -> Self {
++impl From<AstrolendError> for ProgramError {
++    fn from(e: AstrolendError) -> Self {
+         ProgramError::Custom(e as u32)
+     }
+ }
+diff --git a/results/src/events.rs b/results/src/events.rs
+index a98045e..18926d3 100755
+--- a/results/src/events.rs
++++ b/results/src/events.rs
+@@ -1,4 +1,4 @@
+-use crate::{prelude::*, state::marginfi_group::BankConfigOpt};
++use crate::{prelude::*, state::astrolend_group::BankConfigOpt};
+ use anchor_lang::prelude::*;
+ 
+ // Event headers
+@@ -6,26 +6,26 @@ use anchor_lang::prelude::*;
+ #[derive(AnchorSerialize, AnchorDeserialize)]
+ pub struct GroupEventHeader {
+     pub signer: Option<Pubkey>,
+-    pub marginfi_group: Pubkey,
++    pub astrolend_group: Pubkey,
+ }
+ 
+ #[derive(AnchorSerialize, AnchorDeserialize)]
+ pub struct AccountEventHeader {
+     pub signer: Option<Pubkey>,
+-    pub marginfi_account: Pubkey,
+-    pub marginfi_account_authority: Pubkey,
+-    pub marginfi_group: Pubkey,
++    pub astrolend_account: Pubkey,
++    pub astrolend_account_authority: Pubkey,
++    pub astrolend_group: Pubkey,
+ }
+ 
+-// marginfi group events
++// astrolend group events
+ 
+ #[event]
+-pub struct MarginfiGroupCreateEvent {
++pub struct AstrolendGroupCreateEvent {
+     pub header: GroupEventHeader,
+ }
+ 
+ #[event]
+-pub struct MarginfiGroupConfigureEvent {
++pub struct AstrolendGroupConfigureEvent {
+     pub header: GroupEventHeader,
+     pub config: GroupConfig,
+ }
+@@ -76,10 +76,10 @@ pub struct LendingPoolBankHandleBankruptcyEvent {
+     pub socialized_amount: f64,
+ }
+ 
+-// marginfi account events
++// astrolend account events
+ 
+ #[event]
+-pub struct MarginfiAccountCreateEvent {
++pub struct AstrolendAccountCreateEvent {
+     pub header: AccountEventHeader,
+ }
+ 
+@@ -128,8 +128,8 @@ pub struct LiquidationBalances {
+ #[event]
+ pub struct LendingAccountLiquidateEvent {
+     pub header: AccountEventHeader,
+-    pub liquidatee_marginfi_account: Pubkey,
+-    pub liquidatee_marginfi_account_authority: Pubkey,
++    pub liquidatee_astrolend_account: Pubkey,
++    pub liquidatee_astrolend_account_authority: Pubkey,
+     pub asset_bank: Pubkey,
+     pub asset_mint: Pubkey,
+     pub liability_bank: Pubkey,
+@@ -141,7 +141,7 @@ pub struct LendingAccountLiquidateEvent {
+ }
+ 
+ #[event]
+-pub struct MarginfiAccountTransferAccountAuthorityEvent {
++pub struct AstrolendAccountTransferAccountAuthorityEvent {
+     pub header: AccountEventHeader,
+     pub old_account_authority: Pubkey,
+     pub new_account_authority: Pubkey,
+diff --git a/results/src/instructions/marginfi_account/borrow.rs b/results/src/instructions/astrolend_account/borrow.rs
+similarity index 76%
+rename from results/src/instructions/marginfi_account/borrow.rs
+rename to results/src/instructions/astrolend_account/borrow.rs
+index c43395e..af29fd2 100755
+--- a/results/src/instructions/marginfi_account/borrow.rs
++++ b/results/src/instructions/astrolend_account/borrow.rs
+@@ -2,10 +2,10 @@ use crate::{
+     bank_signer, check,
+     constants::{LIQUIDITY_VAULT_AUTHORITY_SEED, LIQUIDITY_VAULT_SEED},
+     events::{AccountEventHeader, LendingAccountBorrowEvent},
+-    prelude::{MarginfiError, MarginfiGroup, MarginfiResult},
++    prelude::{AstrolendError, AstrolendGroup, AstrolendResult},
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, RiskEngine, DISABLED_FLAG},
+-        marginfi_group::{Bank, BankVaultType},
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, RiskEngine, DISABLED_FLAG},
++        astrolend_group::{Bank, BankVaultType},
+     },
+     utils,
+ };
+@@ -24,9 +24,9 @@ use solana_program::{clock::Clock, sysvar::Sysvar};
+ pub fn lending_account_borrow<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingAccountBorrow<'info>>,
+     amount: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingAccountBorrow {
+-        marginfi_account: marginfi_account_loader,
++        astrolend_account: astrolend_account_loader,
+         destination_token_account,
+         bank_liquidity_vault,
+         token_program,
+@@ -41,11 +41,11 @@ pub fn lending_account_borrow<'info>(
+         token_program.key,
+     )?;
+ 
+-    let mut marginfi_account = marginfi_account_loader.load_mut()?;
++    let mut astrolend_account = astrolend_account_loader.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     bank_loader.load_mut()?.accrue_interest(
+@@ -62,7 +62,7 @@ pub fn lending_account_borrow<'info>(
+         let mut bank_account = BankAccountWrapper::find_or_create(
+             &bank_loader.key(),
+             &mut bank,
+-            &mut marginfi_account.lending_account,
++            &mut astrolend_account.lending_account,
+         )?;
+ 
+         // User needs to borrow amount + fee to receive amount
+@@ -97,9 +97,9 @@ pub fn lending_account_borrow<'info>(
+         emit!(LendingAccountBorrowEvent {
+             header: AccountEventHeader {
+                 signer: Some(ctx.accounts.signer.key()),
+-                marginfi_account: marginfi_account_loader.key(),
+-                marginfi_account_authority: marginfi_account.authority,
+-                marginfi_group: marginfi_account.group,
++                astrolend_account: astrolend_account_loader.key(),
++                astrolend_account_authority: astrolend_account.authority,
++                astrolend_group: astrolend_account.group,
+             },
+             bank: bank_loader.key(),
+             mint: bank.mint,
+@@ -109,29 +109,29 @@ pub fn lending_account_borrow<'info>(
+ 
+     // Check account health, if below threshold fail transaction
+     // Assuming `ctx.remaining_accounts` holds only oracle accounts
+-    RiskEngine::check_account_init_health(&marginfi_account, ctx.remaining_accounts)?;
++    RiskEngine::check_account_init_health(&astrolend_account, ctx.remaining_accounts)?;
+ 
+     Ok(())
+ }
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountBorrow<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load() ?.group == marginfi_group.key(),
++        constraint = astrolend_account.load() ?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load() ?.authority,
++        address = astrolend_account.load() ?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load() ?.group == marginfi_group.key(),
++        constraint = bank.load() ?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+diff --git a/results/src/instructions/astrolend_account/close.rs b/results/src/instructions/astrolend_account/close.rs
+new file mode 100755
+index 0000000..6538d67
+--- /dev/null
++++ b/results/src/instructions/astrolend_account/close.rs
+@@ -0,0 +1,25 @@
++use anchor_lang::prelude::*;
++
++use crate::{check, state::astrolend_account::AstrolendAccount, AstrolendError, AstrolendResult};
++
++pub fn close_account(ctx: Context<AstrolendAccountClose>) -> AstrolendResult {
++    let astrolend_account = &ctx.accounts.astrolend_account.load()?;
++
++    check!(
++        astrolend_account.can_be_closed(),
++        AstrolendError::IllegalAction,
++        "Account cannot be closed"
++    );
++
++    Ok(())
++}
++
++#[derive(Accounts)]
++pub struct AstrolendAccountClose<'info> {
++    #[account(mut, close = fee_payer)]
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
++    #[account(address = astrolend_account.load()?.authority)]
++    pub authority: Signer<'info>,
++    #[account(mut)]
++    pub fee_payer: Signer<'info>,
++}
+diff --git a/results/src/instructions/marginfi_account/close_balance.rs b/results/src/instructions/astrolend_account/close_balance.rs
+similarity index 52%
+rename from results/src/instructions/marginfi_account/close_balance.rs
+rename to results/src/instructions/astrolend_account/close_balance.rs
+index a0285d0..09a05ec 100755
+--- a/results/src/instructions/marginfi_account/close_balance.rs
++++ b/results/src/instructions/astrolend_account/close_balance.rs
+@@ -4,24 +4,24 @@ use crate::{
+     check,
+     prelude::*,
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, DISABLED_FLAG},
+-        marginfi_group::Bank,
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, DISABLED_FLAG},
++        astrolend_group::Bank,
+     },
+ };
+ 
+-pub fn lending_account_close_balance(ctx: Context<LendingAccountCloseBalance>) -> MarginfiResult {
++pub fn lending_account_close_balance(ctx: Context<LendingAccountCloseBalance>) -> AstrolendResult {
+     let LendingAccountCloseBalance {
+-        marginfi_account,
++        astrolend_account,
+         bank: bank_loader,
+         ..
+     } = ctx.accounts;
+ 
+-    let mut marginfi_account = marginfi_account.load_mut()?;
++    let mut astrolend_account = astrolend_account.load_mut()?;
+     let mut bank = bank_loader.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     bank.accrue_interest(
+@@ -33,7 +33,7 @@ pub fn lending_account_close_balance(ctx: Context<LendingAccountCloseBalance>) -
+     let mut bank_account = BankAccountWrapper::find(
+         &bank_loader.key(),
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?;
+ 
+     bank_account.close_balance()?;
+@@ -43,22 +43,22 @@ pub fn lending_account_close_balance(ctx: Context<LendingAccountCloseBalance>) -
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountCloseBalance<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load()?.authority,
++        address = astrolend_account.load()?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ }
+diff --git a/results/src/instructions/marginfi_account/deposit.rs b/results/src/instructions/astrolend_account/deposit.rs
+similarity index 74%
+rename from results/src/instructions/marginfi_account/deposit.rs
+rename to results/src/instructions/astrolend_account/deposit.rs
+index 1f47cdd..3017574 100755
+--- a/results/src/instructions/marginfi_account/deposit.rs
++++ b/results/src/instructions/astrolend_account/deposit.rs
+@@ -4,8 +4,8 @@ use crate::{
+     events::{AccountEventHeader, LendingAccountDepositEvent},
+     prelude::*,
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, DISABLED_FLAG},
+-        marginfi_group::Bank,
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, DISABLED_FLAG},
++        astrolend_group::Bank,
+     },
+     utils,
+ };
+@@ -24,9 +24,9 @@ use solana_program::sysvar::Sysvar;
+ pub fn lending_account_deposit<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingAccountDeposit<'info>>,
+     amount: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingAccountDeposit {
+-        marginfi_account: marginfi_account_loader,
++        astrolend_account: astrolend_account_loader,
+         signer,
+         signer_token_account,
+         bank_liquidity_vault,
+@@ -42,11 +42,11 @@ pub fn lending_account_deposit<'info>(
+     )?;
+ 
+     let mut bank = bank_loader.load_mut()?;
+-    let mut marginfi_account = marginfi_account_loader.load_mut()?;
++    let mut astrolend_account = astrolend_account_loader.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     bank.accrue_interest(
+@@ -58,7 +58,7 @@ pub fn lending_account_deposit<'info>(
+     let mut bank_account = BankAccountWrapper::find_or_create(
+         &bank_loader.key(),
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?;
+ 
+     bank_account.deposit(I80F48::from_num(amount))?;
+@@ -84,9 +84,9 @@ pub fn lending_account_deposit<'info>(
+     emit!(LendingAccountDepositEvent {
+         header: AccountEventHeader {
+             signer: Some(signer.key()),
+-            marginfi_account: marginfi_account_loader.key(),
+-            marginfi_account_authority: marginfi_account.authority,
+-            marginfi_group: marginfi_account.group,
++            astrolend_account: astrolend_account_loader.key(),
++            astrolend_account_authority: astrolend_account.authority,
++            astrolend_group: astrolend_account.group,
+         },
+         bank: bank_loader.key(),
+         mint: bank.mint,
+@@ -98,22 +98,22 @@ pub fn lending_account_deposit<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountDeposit<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load()?.authority,
++        address = astrolend_account.load()?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+diff --git a/results/src/instructions/marginfi_account/emissions.rs b/results/src/instructions/astrolend_account/emissions.rs
+similarity index 74%
+rename from results/src/instructions/marginfi_account/emissions.rs
+rename to results/src/instructions/astrolend_account/emissions.rs
+index 9f73392..37361e3 100755
+--- a/results/src/instructions/marginfi_account/emissions.rs
++++ b/results/src/instructions/astrolend_account/emissions.rs
+@@ -7,21 +7,21 @@ use crate::{
+     check,
+     constants::{EMISSIONS_AUTH_SEED, EMISSIONS_TOKEN_ACCOUNT_SEED},
+     debug,
+-    prelude::{MarginfiError, MarginfiResult},
++    prelude::{AstrolendError, AstrolendResult},
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, DISABLED_FLAG},
+-        marginfi_group::{Bank, MarginfiGroup},
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, DISABLED_FLAG},
++        astrolend_group::{Bank, AstrolendGroup},
+     },
+ };
+ 
+ pub fn lending_account_withdraw_emissions<'info>(
+     ctx: Context<'_, '_, 'info, 'info, LendingAccountWithdrawEmissions<'info>>,
+-) -> MarginfiResult {
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
++) -> AstrolendResult {
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     let mut bank = ctx.accounts.bank.load_mut()?;
+@@ -29,7 +29,7 @@ pub fn lending_account_withdraw_emissions<'info>(
+     let mut balance = BankAccountWrapper::find(
+         ctx.accounts.bank.to_account_info().key,
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?;
+ 
+     // Settle emissions
+@@ -66,22 +66,22 @@ pub fn lending_account_withdraw_emissions<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountWithdrawEmissions<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load()?.authority,
++        address = astrolend_account.load()?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+@@ -120,14 +120,14 @@ pub struct LendingAccountWithdrawEmissions<'info> {
+ /// Permissionlessly settle unclaimed emissions to a users account.
+ pub fn lending_account_settle_emissions(
+     ctx: Context<LendingAccountSettleEmissions>,
+-) -> MarginfiResult {
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
++) -> AstrolendResult {
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
+     let mut bank = ctx.accounts.bank.load_mut()?;
+ 
+     let mut balance = BankAccountWrapper::find(
+         ctx.accounts.bank.to_account_info().key,
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?;
+ 
+     balance.claim_emissions(Clock::get()?.unix_timestamp.try_into().unwrap())?;
+@@ -139,9 +139,9 @@ pub fn lending_account_settle_emissions(
+ pub struct LendingAccountSettleEmissions<'info> {
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == bank.load()?.group,
++        constraint = astrolend_account.load()?.group == bank.load()?.group,
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(mut)]
+     pub bank: AccountLoader<'info, Bank>,
+diff --git a/results/src/instructions/marginfi_account/flashloan.rs b/results/src/instructions/astrolend_account/flashloan.rs
+similarity index 55%
+rename from results/src/instructions/marginfi_account/flashloan.rs
+rename to results/src/instructions/astrolend_account/flashloan.rs
+index 57ab001..5603c1e 100755
+--- a/results/src/instructions/marginfi_account/flashloan.rs
++++ b/results/src/instructions/astrolend_account/flashloan.rs
+@@ -7,21 +7,21 @@ use solana_program::{
+ use crate::{
+     check,
+     prelude::*,
+-    state::marginfi_account::{MarginfiAccount, RiskEngine, DISABLED_FLAG, IN_FLASHLOAN_FLAG},
++    state::astrolend_account::{AstrolendAccount, RiskEngine, DISABLED_FLAG, IN_FLASHLOAN_FLAG},
+ };
+ 
+ pub fn lending_account_start_flashloan(
+     ctx: Context<LendingAccountStartFlashloan>,
+     end_index: u64,
+-) -> MarginfiResult<()> {
++) -> AstrolendResult<()> {
+     check_flashloan_can_start(
+-        &ctx.accounts.marginfi_account,
++        &ctx.accounts.astrolend_account,
+         &ctx.accounts.ixs_sysvar,
+         end_index as usize,
+     )?;
+ 
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
+-    marginfi_account.set_flag(IN_FLASHLOAN_FLAG);
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
++    astrolend_account.set_flag(IN_FLASHLOAN_FLAG);
+ 
+     Ok(())
+ }
+@@ -29,53 +29,53 @@ pub fn lending_account_start_flashloan(
+ #[derive(Accounts)]
+ pub struct LendingAccountStartFlashloan<'info> {
+     #[account(mut)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
+-    #[account(address = marginfi_account.load()?.authority)]
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
++    #[account(address = astrolend_account.load()?.authority)]
+     pub signer: Signer<'info>,
+     /// CHECK: Instructions sysvar
+     #[account(address = sysvar::instructions::ID)]
+     pub ixs_sysvar: AccountInfo<'info>,
+ }
+ 
+-const END_FL_IX_MARGINFI_ACCOUNT_AI_IDX: usize = 0;
++const END_FL_IX_ASTROLEND_ACCOUNT_AI_IDX: usize = 0;
+ 
+ /// Checklist
+ /// 1. `end_flashloan` ix index is after `start_flashloan` ix index
+ /// 2. Ixs has an `end_flashloan` ix present
+-/// 3. `end_flashloan` ix is for the marginfi program
+-/// 3. `end_flashloan` ix is for the same marginfi account
++/// 3. `end_flashloan` ix is for the astrolend program
++/// 3. `end_flashloan` ix is for the same astrolend account
+ /// 4. Account is not disabled
+ /// 5. Account is not already in a flashloan
+ /// 6. Start flashloan ix is not in CPI
+ /// 7. End flashloan ix is not in CPI
+ pub fn check_flashloan_can_start(
+-    marginfi_account: &AccountLoader<MarginfiAccount>,
++    astrolend_account: &AccountLoader<AstrolendAccount>,
+     sysvar_ixs: &AccountInfo,
+     end_fl_idx: usize,
+-) -> MarginfiResult<()> {
++) -> AstrolendResult<()> {
+     // Note: FLASHLOAN_ENABLED_FLAG is now deprecated.
+     // Any non-disabled account can initiate a flash loan.
+     check!(
+-        !marginfi_account.load()?.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.load()?.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     let current_ix_idx: usize = instructions::load_current_index_checked(sysvar_ixs)?.into();
+ 
+-    check!(current_ix_idx < end_fl_idx, MarginfiError::IllegalFlashloan);
++    check!(current_ix_idx < end_fl_idx, AstrolendError::IllegalFlashloan);
+ 
+     // Check current ix is not a CPI
+     let current_ix = instructions::load_instruction_at_checked(current_ix_idx, sysvar_ixs)?;
+ 
+     check!(
+         get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT,
+-        MarginfiError::IllegalFlashloan,
++        AstrolendError::IllegalFlashloan,
+         "Start flashloan ix should not be in CPI"
+     );
+ 
+     check!(
+         current_ix.program_id.eq(&crate::id()),
+-        MarginfiError::IllegalFlashloan,
++        AstrolendError::IllegalFlashloan,
+         "Start flashloan ix should not be in CPI"
+     );
+ 
+@@ -85,36 +85,36 @@ pub fn check_flashloan_can_start(
+     check!(
+         unchecked_end_fl_ix.data[..8]
+             .eq(&crate::instruction::LendingAccountEndFlashloan::DISCRIMINATOR),
+-        MarginfiError::IllegalFlashloan
++        AstrolendError::IllegalFlashloan
+     );
+ 
+     check!(
+         unchecked_end_fl_ix.program_id.eq(&crate::id()),
+-        MarginfiError::IllegalFlashloan
++        AstrolendError::IllegalFlashloan
+     );
+ 
+     let end_fl_ix = unchecked_end_fl_ix;
+ 
+-    let end_fl_marginfi_account = end_fl_ix
++    let end_fl_astrolend_account = end_fl_ix
+         .accounts
+-        .get(END_FL_IX_MARGINFI_ACCOUNT_AI_IDX)
+-        .ok_or(MarginfiError::IllegalFlashloan)?;
++        .get(END_FL_IX_ASTROLEND_ACCOUNT_AI_IDX)
++        .ok_or(AstrolendError::IllegalFlashloan)?;
+ 
+     check!(
+-        end_fl_marginfi_account.pubkey.eq(&marginfi_account.key()),
+-        MarginfiError::IllegalFlashloan
++        end_fl_astrolend_account.pubkey.eq(&astrolend_account.key()),
++        AstrolendError::IllegalFlashloan
+     );
+ 
+-    let marginf_account = marginfi_account.load()?;
++    let astrol_account = astrolend_account.load()?;
+ 
+     check!(
+-        !marginf_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrol_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     check!(
+-        !marginf_account.get_flag(IN_FLASHLOAN_FLAG),
+-        MarginfiError::IllegalFlashloan
++        !astrol_account.get_flag(IN_FLASHLOAN_FLAG),
++        AstrolendError::IllegalFlashloan
+     );
+ 
+     Ok(())
+@@ -122,18 +122,18 @@ pub fn check_flashloan_can_start(
+ 
+ pub fn lending_account_end_flashloan<'info>(
+     ctx: Context<'_, '_, 'info, 'info, LendingAccountEndFlashloan<'info>>,
+-) -> MarginfiResult<()> {
++) -> AstrolendResult<()> {
+     check!(
+         get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT,
+-        MarginfiError::IllegalFlashloan,
++        AstrolendError::IllegalFlashloan,
+         "End flashloan ix should not be in CPI"
+     );
+ 
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
+ 
+-    marginfi_account.unset_flag(IN_FLASHLOAN_FLAG);
++    astrolend_account.unset_flag(IN_FLASHLOAN_FLAG);
+ 
+-    RiskEngine::check_account_init_health(&marginfi_account, ctx.remaining_accounts)?;
++    RiskEngine::check_account_init_health(&astrolend_account, ctx.remaining_accounts)?;
+ 
+     Ok(())
+ }
+@@ -141,7 +141,7 @@ pub fn lending_account_end_flashloan<'info>(
+ #[derive(Accounts)]
+ pub struct LendingAccountEndFlashloan<'info> {
+     #[account(mut)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
+-    #[account(address = marginfi_account.load()?.authority)]
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
++    #[account(address = astrolend_account.load()?.authority)]
+     pub signer: Signer<'info>,
+ }
+diff --git a/results/src/instructions/astrolend_account/initialize.rs b/results/src/instructions/astrolend_account/initialize.rs
+new file mode 100755
+index 0000000..af2f4a1
+--- /dev/null
++++ b/results/src/instructions/astrolend_account/initialize.rs
+@@ -0,0 +1,50 @@
++use crate::{
++    events::{AccountEventHeader, AstrolendAccountCreateEvent},
++    prelude::*,
++    state::astrolend_account::AstrolendAccount,
++};
++use anchor_lang::prelude::*;
++use solana_program::sysvar::Sysvar;
++
++pub fn initialize_account(ctx: Context<AstrolendAccountInitialize>) -> AstrolendResult {
++    let AstrolendAccountInitialize {
++        authority,
++        astrolend_group,
++        astrolend_account: astrolend_account_loader,
++        ..
++    } = ctx.accounts;
++
++    let mut astrolend_account = astrolend_account_loader.load_init()?;
++
++    astrolend_account.initialize(astrolend_group.key(), authority.key());
++
++    emit!(AstrolendAccountCreateEvent {
++        header: AccountEventHeader {
++            signer: Some(authority.key()),
++            astrolend_account: astrolend_account_loader.key(),
++            astrolend_account_authority: astrolend_account.authority,
++            astrolend_group: astrolend_account.group,
++        }
++    });
++
++    Ok(())
++}
++
++#[derive(Accounts)]
++pub struct AstrolendAccountInitialize<'info> {
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
++
++    #[account(
++        init,
++        payer = fee_payer,
++        space = 8 + std::mem::size_of::<AstrolendAccount>()
++    )]
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
++
++    pub authority: Signer<'info>,
++
++    #[account(mut)]
++    pub fee_payer: Signer<'info>,
++
++    pub system_program: Program<'info, System>,
++}
+diff --git a/results/src/instructions/marginfi_account/liquidate.rs b/results/src/instructions/astrolend_account/liquidate.rs
+similarity index 83%
+rename from results/src/instructions/marginfi_account/liquidate.rs
+rename to results/src/instructions/astrolend_account/liquidate.rs
+index 8873ac2..c01d27a 100755
+--- a/results/src/instructions/marginfi_account/liquidate.rs
++++ b/results/src/instructions/astrolend_account/liquidate.rs
+@@ -2,13 +2,13 @@ use crate::constants::{
+     INSURANCE_VAULT_SEED, LIQUIDATION_INSURANCE_FEE, LIQUIDATION_LIQUIDATOR_FEE,
+ };
+ use crate::events::{AccountEventHeader, LendingAccountLiquidateEvent, LiquidationBalances};
+-use crate::state::marginfi_account::{calc_amount, calc_value, RiskEngine};
+-use crate::state::marginfi_group::{Bank, BankVaultType};
++use crate::state::astrolend_account::{calc_amount, calc_value, RiskEngine};
++use crate::state::astrolend_group::{Bank, BankVaultType};
+ use crate::state::price::{OraclePriceFeedAdapter, OraclePriceType, PriceAdapter, PriceBias};
+ use crate::{
+     bank_signer,
+     constants::{LIQUIDITY_VAULT_AUTHORITY_SEED, LIQUIDITY_VAULT_SEED},
+-    state::marginfi_account::{BankAccountWrapper, MarginfiAccount},
++    state::astrolend_account::{BankAccountWrapper, AstrolendAccount},
+ };
+ use crate::{check, debug, prelude::*, utils};
+ use anchor_lang::prelude::*;
+@@ -17,7 +17,7 @@ use fixed::types::I80F48;
+ use solana_program::clock::Clock;
+ use solana_program::sysvar::Sysvar;
+ 
+-/// Instruction liquidates a position owned by a margin account that is in a unhealthy state.
++/// Instruction liquidates a position owned by a astrol account that is in a unhealthy state.
+ /// The liquidator can purchase discounted collateral from the unhealthy account, in exchange for paying its debt.
+ ///
+ /// ### Liquidation math:
+@@ -78,27 +78,27 @@ use solana_program::sysvar::Sysvar;
+ pub fn lending_account_liquidate<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingAccountLiquidate<'info>>,
+     asset_amount: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     check!(
+         asset_amount > 0,
+-        MarginfiError::IllegalLiquidation,
++        AstrolendError::IllegalLiquidation,
+         "Asset amount must be positive"
+     );
+ 
+     check!(
+         ctx.accounts.asset_bank.key() != ctx.accounts.liab_bank.key(),
+-        MarginfiError::IllegalLiquidation,
++        AstrolendError::IllegalLiquidation,
+         "Asset and liability bank cannot be the same"
+     );
+ 
+     let LendingAccountLiquidate {
+-        liquidator_marginfi_account: liquidator_marginfi_account_loader,
+-        liquidatee_marginfi_account: liquidatee_marginfi_account_loader,
++        liquidator_astrolend_account: liquidator_astrolend_account_loader,
++        liquidatee_astrolend_account: liquidatee_astrolend_account_loader,
+         ..
+     } = ctx.accounts;
+ 
+-    let mut liquidator_marginfi_account = liquidator_marginfi_account_loader.load_mut()?;
+-    let mut liquidatee_marginfi_account = liquidatee_marginfi_account_loader.load_mut()?;
++    let mut liquidator_astrolend_account = liquidator_astrolend_account_loader.load_mut()?;
++    let mut liquidatee_astrolend_account = liquidatee_astrolend_account_loader.load_mut()?;
+     let clock = Clock::get()?;
+     let current_timestamp = clock.unix_timestamp;
+ 
+@@ -119,14 +119,14 @@ pub fn lending_account_liquidate<'info>(
+             ctx.accounts.liab_bank.key(),
+         )?;
+     }
+-    let init_liquidatee_remaining_len = liquidatee_marginfi_account.get_remaining_accounts_len();
++    let init_liquidatee_remaining_len = liquidatee_astrolend_account.get_remaining_accounts_len();
+     let pre_liquidation_health = {
+         let liquidatee_accounts_starting_pos =
+             ctx.remaining_accounts.len() - init_liquidatee_remaining_len;
+         let liquidatee_remaining_accounts =
+             &ctx.remaining_accounts[liquidatee_accounts_starting_pos..];
+ 
+-        RiskEngine::new(&liquidatee_marginfi_account, liquidatee_remaining_accounts)?
++        RiskEngine::new(&liquidatee_astrolend_account, liquidatee_remaining_accounts)?
+             .check_pre_liquidation_condition_and_get_account_health(&ctx.accounts.liab_bank.key())?
+     };
+ 
+@@ -202,7 +202,7 @@ pub fn lending_account_liquidate<'info>(
+             let mut bank_account = BankAccountWrapper::find_or_create(
+                 &ctx.accounts.liab_bank.key(),
+                 &mut liab_bank,
+-                &mut liquidator_marginfi_account.lending_account,
++                &mut liquidator_astrolend_account.lending_account,
+             )?;
+ 
+             let pre_balance = bank_account
+@@ -223,7 +223,7 @@ pub fn lending_account_liquidate<'info>(
+             let mut bank_account = BankAccountWrapper::find(
+                 &ctx.accounts.asset_bank.key(),
+                 &mut asset_bank,
+-                &mut liquidatee_marginfi_account.lending_account,
++                &mut liquidatee_astrolend_account.lending_account,
+             )?;
+ 
+             let pre_balance = bank_account
+@@ -232,7 +232,7 @@ pub fn lending_account_liquidate<'info>(
+ 
+             bank_account
+                 .withdraw(asset_amount)
+-                .map_err(|_| MarginfiError::IllegalLiquidation)?;
++                .map_err(|_| AstrolendError::IllegalLiquidation)?;
+ 
+             let post_balance = bank_account
+                 .bank
+@@ -246,7 +246,7 @@ pub fn lending_account_liquidate<'info>(
+             let mut bank_account = BankAccountWrapper::find_or_create(
+                 &ctx.accounts.asset_bank.key(),
+                 &mut asset_bank,
+-                &mut liquidator_marginfi_account.lending_account,
++                &mut liquidator_astrolend_account.lending_account,
+             )?;
+ 
+             let pre_balance = bank_account
+@@ -265,7 +265,7 @@ pub fn lending_account_liquidate<'info>(
+         let (insurance_fee_to_transfer, insurance_fee_dust) = (
+             insurance_fund_fee
+                 .checked_to_num::<u64>()
+-                .ok_or(MarginfiError::MathError)?,
++                .ok_or(AstrolendError::MathError)?,
+             insurance_fund_fee.frac(),
+         );
+ 
+@@ -276,7 +276,7 @@ pub fn lending_account_liquidate<'info>(
+             let mut liquidatee_liab_bank_account = BankAccountWrapper::find_or_create(
+                 &ctx.accounts.liab_bank.key(),
+                 &mut liab_bank,
+-                &mut liquidatee_marginfi_account.lending_account,
++                &mut liquidatee_astrolend_account.lending_account,
+             )?;
+ 
+             let liquidatee_liability_pre_balance =
+@@ -319,7 +319,7 @@ pub fn lending_account_liquidate<'info>(
+         liab_bank.collected_insurance_fees_outstanding =
+             I80F48::from(liab_bank.collected_insurance_fees_outstanding)
+                 .checked_add(insurance_fee_dust)
+-                .ok_or(MarginfiError::MathError)?
++                .ok_or(AstrolendError::MathError)?
+                 .into();
+ 
+         (
+@@ -343,7 +343,7 @@ pub fn lending_account_liquidate<'info>(
+     let liquidatee_accounts_starting_pos =
+         ctx.remaining_accounts.len() - init_liquidatee_remaining_len;
+     let liquidator_accounts_starting_pos =
+-        liquidatee_accounts_starting_pos - liquidator_marginfi_account.get_remaining_accounts_len();
++        liquidatee_accounts_starting_pos - liquidator_astrolend_account.get_remaining_accounts_len();
+ 
+     let liquidatee_remaining_accounts = &ctx.remaining_accounts[liquidatee_accounts_starting_pos..];
+     let liquidator_remaining_accounts =
+@@ -351,7 +351,7 @@ pub fn lending_account_liquidate<'info>(
+ 
+     // Verify liquidatee liquidation post health
+     let post_liquidation_health =
+-        RiskEngine::new(&liquidatee_marginfi_account, liquidatee_remaining_accounts)?
++        RiskEngine::new(&liquidatee_astrolend_account, liquidatee_remaining_accounts)?
+             .check_post_liquidation_condition_and_get_account_health(
+                 &ctx.accounts.liab_bank.key(),
+                 pre_liquidation_health,
+@@ -359,19 +359,19 @@ pub fn lending_account_liquidate<'info>(
+ 
+     // Verify liquidator account health
+     RiskEngine::check_account_init_health(
+-        &liquidator_marginfi_account,
++        &liquidator_astrolend_account,
+         liquidator_remaining_accounts,
+     )?;
+ 
+     emit!(LendingAccountLiquidateEvent {
+         header: AccountEventHeader {
+             signer: Some(ctx.accounts.signer.key()),
+-            marginfi_account: liquidator_marginfi_account_loader.key(),
+-            marginfi_account_authority: liquidator_marginfi_account.authority,
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_account: liquidator_astrolend_account_loader.key(),
++            astrolend_account_authority: liquidator_astrolend_account.authority,
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+         },
+-        liquidatee_marginfi_account: liquidatee_marginfi_account_loader.key(),
+-        liquidatee_marginfi_account_authority: liquidatee_marginfi_account.authority,
++        liquidatee_astrolend_account: liquidatee_astrolend_account_loader.key(),
++        liquidatee_astrolend_account_authority: liquidatee_astrolend_account.authority,
+         asset_bank: ctx.accounts.asset_bank.key(),
+         asset_mint: ctx.accounts.asset_bank.load_mut()?.mint,
+         liability_bank: ctx.accounts.liab_bank.key(),
+@@ -387,36 +387,36 @@ pub fn lending_account_liquidate<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountLiquidate<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = asset_bank.load()?.group == marginfi_group.key()
++        constraint = asset_bank.load()?.group == astrolend_group.key()
+     )]
+     pub asset_bank: AccountLoader<'info, Bank>,
+ 
+     #[account(
+         mut,
+-        constraint = liab_bank.load()?.group == marginfi_group.key()
++        constraint = liab_bank.load()?.group == astrolend_group.key()
+     )]
+     pub liab_bank: AccountLoader<'info, Bank>,
+ 
+     #[account(
+         mut,
+-        constraint = liquidator_marginfi_account.load()?.group == marginfi_group.key()
++        constraint = liquidator_astrolend_account.load()?.group == astrolend_group.key()
+     )]
+-    pub liquidator_marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub liquidator_astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = liquidator_marginfi_account.load()?.authority
++        address = liquidator_astrolend_account.load()?.authority
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = liquidatee_marginfi_account.load()?.group == marginfi_group.key()
++        constraint = liquidatee_astrolend_account.load()?.group == astrolend_group.key()
+     )]
+-    pub liquidatee_marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub liquidatee_astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     /// CHECK: Seed constraint
+     #[account(
+diff --git a/results/src/instructions/marginfi_account/mod.rs b/results/src/instructions/astrolend_account/mod.rs
+similarity index 100%
+rename from results/src/instructions/marginfi_account/mod.rs
+rename to results/src/instructions/astrolend_account/mod.rs
+diff --git a/results/src/instructions/marginfi_account/repay.rs b/results/src/instructions/astrolend_account/repay.rs
+similarity index 74%
+rename from results/src/instructions/marginfi_account/repay.rs
+rename to results/src/instructions/astrolend_account/repay.rs
+index e889221..a186694 100755
+--- a/results/src/instructions/marginfi_account/repay.rs
++++ b/results/src/instructions/astrolend_account/repay.rs
+@@ -2,10 +2,10 @@ use crate::{
+     check,
+     constants::LIQUIDITY_VAULT_SEED,
+     events::{AccountEventHeader, LendingAccountRepayEvent},
+-    prelude::{MarginfiError, MarginfiGroup, MarginfiResult},
++    prelude::{AstrolendError, AstrolendGroup, AstrolendResult},
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, DISABLED_FLAG},
+-        marginfi_group::Bank,
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, DISABLED_FLAG},
++        astrolend_group::Bank,
+     },
+     utils,
+ };
+@@ -24,9 +24,9 @@ pub fn lending_account_repay<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingAccountRepay<'info>>,
+     amount: u64,
+     repay_all: Option<bool>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingAccountRepay {
+-        marginfi_account: marginfi_account_loader,
++        astrolend_account: astrolend_account_loader,
+         signer,
+         signer_token_account,
+         bank_liquidity_vault,
+@@ -43,11 +43,11 @@ pub fn lending_account_repay<'info>(
+ 
+     let repay_all = repay_all.unwrap_or(false);
+     let mut bank = bank_loader.load_mut()?;
+-    let mut marginfi_account = marginfi_account_loader.load_mut()?;
++    let mut astrolend_account = astrolend_account_loader.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     bank.accrue_interest(
+@@ -59,7 +59,7 @@ pub fn lending_account_repay<'info>(
+     let mut bank_account = BankAccountWrapper::find(
+         &bank_loader.key(),
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?;
+ 
+     let repay_amount_post_fee = if repay_all {
+@@ -95,9 +95,9 @@ pub fn lending_account_repay<'info>(
+     emit!(LendingAccountRepayEvent {
+         header: AccountEventHeader {
+             signer: Some(ctx.accounts.signer.key()),
+-            marginfi_account: marginfi_account_loader.key(),
+-            marginfi_account_authority: marginfi_account.authority,
+-            marginfi_group: marginfi_account.group,
++            astrolend_account: astrolend_account_loader.key(),
++            astrolend_account_authority: astrolend_account.authority,
++            astrolend_group: astrolend_account.group,
+         },
+         bank: bank_loader.key(),
+         mint: bank.mint,
+@@ -110,22 +110,22 @@ pub fn lending_account_repay<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountRepay<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load()?.authority,
++        address = astrolend_account.load()?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+diff --git a/results/src/instructions/astrolend_account/transfer_authority.rs b/results/src/instructions/astrolend_account/transfer_authority.rs
+new file mode 100755
+index 0000000..230d656
+--- /dev/null
++++ b/results/src/instructions/astrolend_account/transfer_authority.rs
+@@ -0,0 +1,40 @@
++use crate::{prelude::*, state::astrolend_account::AstrolendAccount};
++use anchor_lang::prelude::*;
++
++pub fn set_account_transfer_authority(
++    ctx: Context<AstrolendAccountSetAccountAuthority>,
++) -> AstrolendResult {
++    // Ensure astrolend_account is dropped out of scope to not exceed stack frame limits
++    {
++        let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
++        let new_account_authority = ctx.accounts.new_authority.key();
++        astrolend_account.set_new_account_authority_checked(new_account_authority)?;
++    }
++
++    // TODO: add back event (dropped for memory reasons)
++
++    Ok(())
++}
++
++#[derive(Accounts)]
++pub struct AstrolendAccountSetAccountAuthority<'info> {
++    #[account(mut)]
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
++
++    /// CHECK: The group is confirmed by the address macro
++    #[account(
++        address = astrolend_account.load()?.group,
++    )]
++    pub astrolend_group: AccountInfo<'info>,
++
++    #[account(
++        address = astrolend_account.load()?.authority,
++    )]
++    pub signer: Signer<'info>,
++
++    /// CHECK: The new account authority doesn't need explicit checks
++    pub new_authority: AccountInfo<'info>,
++
++    #[account(mut)]
++    pub fee_payer: Signer<'info>,
++}
+diff --git a/results/src/instructions/marginfi_account/withdraw.rs b/results/src/instructions/astrolend_account/withdraw.rs
+similarity index 78%
+rename from results/src/instructions/marginfi_account/withdraw.rs
+rename to results/src/instructions/astrolend_account/withdraw.rs
+index 58b1bde..9cc3d5c 100755
+--- a/results/src/instructions/marginfi_account/withdraw.rs
++++ b/results/src/instructions/astrolend_account/withdraw.rs
+@@ -4,8 +4,8 @@ use crate::{
+     events::{AccountEventHeader, LendingAccountWithdrawEvent},
+     prelude::*,
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, RiskEngine, DISABLED_FLAG},
+-        marginfi_group::{Bank, BankVaultType},
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, RiskEngine, DISABLED_FLAG},
++        astrolend_group::{Bank, BankVaultType},
+     },
+     utils,
+ };
+@@ -25,9 +25,9 @@ pub fn lending_account_withdraw<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingAccountWithdraw<'info>>,
+     amount: u64,
+     withdraw_all: Option<bool>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingAccountWithdraw {
+-        marginfi_account: marginfi_account_loader,
++        astrolend_account: astrolend_account_loader,
+         destination_token_account,
+         bank_liquidity_vault,
+         token_program,
+@@ -38,11 +38,11 @@ pub fn lending_account_withdraw<'info>(
+     let clock = Clock::get()?;
+ 
+     let withdraw_all = withdraw_all.unwrap_or(false);
+-    let mut marginfi_account = marginfi_account_loader.load_mut()?;
++    let mut astrolend_account = astrolend_account_loader.load_mut()?;
+ 
+     check!(
+-        !marginfi_account.get_flag(DISABLED_FLAG),
+-        MarginfiError::AccountDisabled
++        !astrolend_account.get_flag(DISABLED_FLAG),
++        AstrolendError::AccountDisabled
+     );
+ 
+     let maybe_bank_mint = utils::maybe_take_bank_mint(
+@@ -65,7 +65,7 @@ pub fn lending_account_withdraw<'info>(
+         let mut bank_account = BankAccountWrapper::find(
+             &bank_loader.key(),
+             &mut bank,
+-            &mut marginfi_account.lending_account,
++            &mut astrolend_account.lending_account,
+         )?;
+ 
+         let amount_pre_fee = if withdraw_all {
+@@ -106,9 +106,9 @@ pub fn lending_account_withdraw<'info>(
+         emit!(LendingAccountWithdrawEvent {
+             header: AccountEventHeader {
+                 signer: Some(ctx.accounts.signer.key()),
+-                marginfi_account: marginfi_account_loader.key(),
+-                marginfi_account_authority: marginfi_account.authority,
+-                marginfi_group: marginfi_account.group,
++                astrolend_account: astrolend_account_loader.key(),
++                astrolend_account_authority: astrolend_account.authority,
++                astrolend_group: astrolend_account.group,
+             },
+             bank: bank_loader.key(),
+             mint: bank.mint,
+@@ -119,29 +119,29 @@ pub fn lending_account_withdraw<'info>(
+ 
+     // Check account health, if below threshold fail transaction
+     // Assuming `ctx.remaining_accounts` holds only oracle accounts
+-    RiskEngine::check_account_init_health(&marginfi_account, ctx.remaining_accounts)?;
++    RiskEngine::check_account_init_health(&astrolend_account, ctx.remaining_accounts)?;
+ 
+     Ok(())
+ }
+ 
+ #[derive(Accounts)]
+ pub struct LendingAccountWithdraw<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     #[account(
+-        address = marginfi_account.load()?.authority,
++        address = astrolend_account.load()?.authority,
+     )]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+diff --git a/results/src/instructions/marginfi_group/accrue_bank_interest.rs b/results/src/instructions/astrolend_group/accrue_bank_interest.rs
+similarity index 67%
+rename from results/src/instructions/marginfi_group/accrue_bank_interest.rs
+rename to results/src/instructions/astrolend_group/accrue_bank_interest.rs
+index 0e7d8c0..6a502c6 100755
+--- a/results/src/instructions/marginfi_group/accrue_bank_interest.rs
++++ b/results/src/instructions/astrolend_group/accrue_bank_interest.rs
+@@ -1,12 +1,12 @@
+ use crate::{
+-    state::marginfi_group::{Bank, MarginfiGroup},
+-    MarginfiResult,
++    state::astrolend_group::{Bank, AstrolendGroup},
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ 
+ pub fn lending_pool_accrue_bank_interest(
+     ctx: Context<LendingPoolAccrueBankInterest>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let clock = Clock::get()?;
+     let mut bank = ctx.accounts.bank.load_mut()?;
+ 
+@@ -21,11 +21,11 @@ pub fn lending_pool_accrue_bank_interest(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolAccrueBankInterest<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ }
+diff --git a/results/src/instructions/marginfi_group/add_pool.rs b/results/src/instructions/astrolend_group/add_pool.rs
+similarity index 90%
+rename from results/src/instructions/marginfi_group/add_pool.rs
+rename to results/src/instructions/astrolend_group/add_pool.rs
+index 10ba21a..493883c 100755
+--- a/results/src/instructions/marginfi_group/add_pool.rs
++++ b/results/src/instructions/astrolend_group/add_pool.rs
+@@ -4,8 +4,8 @@ use crate::{
+         INSURANCE_VAULT_SEED, LIQUIDITY_VAULT_AUTHORITY_SEED, LIQUIDITY_VAULT_SEED,
+     },
+     events::{GroupEventHeader, LendingPoolBankCreateEvent},
+-    state::marginfi_group::{Bank, BankConfig, BankConfigCompact, MarginfiGroup},
+-    MarginfiResult,
++    state::astrolend_group::{Bank, BankConfig, BankConfigCompact, AstrolendGroup},
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ use anchor_spl::token_interface::*;
+@@ -18,7 +18,7 @@ use anchor_spl::token_interface::*;
+ pub fn lending_pool_add_bank(
+     ctx: Context<LendingPoolAddBank>,
+     bank_config: BankConfig,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolAddBank {
+         bank_mint,
+         liquidity_vault,
+@@ -38,7 +38,7 @@ pub fn lending_pool_add_bank(
+     let fee_vault_authority_bump = ctx.bumps.fee_vault_authority;
+ 
+     *bank = Bank::new(
+-        ctx.accounts.marginfi_group.key(),
++        ctx.accounts.astrolend_group.key(),
+         bank_config,
+         bank_mint.key(),
+         bank_mint.decimals,
+@@ -59,7 +59,7 @@ pub fn lending_pool_add_bank(
+ 
+     emit!(LendingPoolBankCreateEvent {
+         header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+             signer: Some(*ctx.accounts.admin.key)
+         },
+         bank: bank_loader.key(),
+@@ -72,11 +72,11 @@ pub fn lending_pool_add_bank(
+ #[derive(Accounts)]
+ #[instruction(bank_config: BankConfigCompact)]
+ pub struct LendingPoolAddBank<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+@@ -174,7 +174,7 @@ pub fn lending_pool_add_bank_with_seed(
+     ctx: Context<LendingPoolAddBankWithSeed>,
+     bank_config: BankConfig,
+     _bank_seed: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolAddBankWithSeed {
+         bank_mint,
+         liquidity_vault,
+@@ -194,7 +194,7 @@ pub fn lending_pool_add_bank_with_seed(
+     let fee_vault_authority_bump = ctx.bumps.fee_vault_authority;
+ 
+     *bank = Bank::new(
+-        ctx.accounts.marginfi_group.key(),
++        ctx.accounts.astrolend_group.key(),
+         bank_config,
+         bank_mint.key(),
+         bank_mint.decimals,
+@@ -215,7 +215,7 @@ pub fn lending_pool_add_bank_with_seed(
+ 
+     emit!(LendingPoolBankCreateEvent {
+         header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+             signer: Some(*ctx.accounts.admin.key)
+         },
+         bank: bank_loader.key(),
+@@ -232,11 +232,11 @@ pub fn lending_pool_add_bank_with_seed(
+ #[derive(Accounts)]
+ #[instruction(bank_config: BankConfigCompact, bank_seed: u64)]
+ pub struct LendingPoolAddBankWithSeed<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+@@ -250,7 +250,7 @@ pub struct LendingPoolAddBankWithSeed<'info> {
+         space = 8 + std::mem::size_of::<Bank>(),
+         payer = fee_payer,
+         seeds = [
+-            marginfi_group.key().as_ref(),
++            astrolend_group.key().as_ref(),
+             bank_mint.key().as_ref(),
+             &bank_seed.to_le_bytes(),
+         ],
+diff --git a/results/src/instructions/marginfi_group/collect_bank_fees.rs b/results/src/instructions/astrolend_group/collect_bank_fees.rs
+similarity index 89%
+rename from results/src/instructions/marginfi_group/collect_bank_fees.rs
+rename to results/src/instructions/astrolend_group/collect_bank_fees.rs
+index 507669a..b83d459 100755
+--- a/results/src/instructions/marginfi_group/collect_bank_fees.rs
++++ b/results/src/instructions/astrolend_group/collect_bank_fees.rs
+@@ -7,8 +7,8 @@ use crate::{
+         FEE_VAULT_SEED, INSURANCE_VAULT_SEED, LIQUIDITY_VAULT_AUTHORITY_SEED, LIQUIDITY_VAULT_SEED,
+     },
+     math_error,
+-    state::marginfi_group::{Bank, BankVaultType, MarginfiGroup},
+-    MarginfiResult,
++    state::astrolend_group::{Bank, BankVaultType, AstrolendGroup},
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ use anchor_spl::token_interface::{TokenAccount, TokenInterface};
+@@ -17,7 +17,7 @@ use std::cmp::min;
+ 
+ pub fn lending_pool_collect_bank_fees<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingPoolCollectBankFees<'info>>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolCollectBankFees {
+         liquidity_vault_authority,
+         insurance_vault,
+@@ -107,7 +107,7 @@ pub fn lending_pool_collect_bank_fees<'info>(
+ 
+     emit!(LendingPoolBankCollectFeesEvent {
+         header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+             signer: None
+         },
+         bank: ctx.accounts.bank.key(),
+@@ -123,11 +123,11 @@ pub fn lending_pool_collect_bank_fees<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolCollectBankFees<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+@@ -180,7 +180,7 @@ pub struct LendingPoolCollectBankFees<'info> {
+ pub fn lending_pool_withdraw_fees<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingPoolWithdrawFees<'info>>,
+     amount: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolWithdrawFees {
+         bank: bank_loader,
+         fee_vault,
+@@ -214,15 +214,15 @@ pub fn lending_pool_withdraw_fees<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolWithdrawFees<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+     #[account(
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+@@ -257,7 +257,7 @@ pub struct LendingPoolWithdrawFees<'info> {
+ pub fn lending_pool_withdraw_insurance<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingPoolWithdrawInsurance<'info>>,
+     amount: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolWithdrawInsurance {
+         bank: bank_loader,
+         insurance_vault,
+@@ -291,15 +291,15 @@ pub fn lending_pool_withdraw_insurance<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolWithdrawInsurance<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+     #[account(
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+diff --git a/results/src/instructions/marginfi_group/configure.rs b/results/src/instructions/astrolend_group/configure.rs
+similarity index 58%
+rename from results/src/instructions/marginfi_group/configure.rs
+rename to results/src/instructions/astrolend_group/configure.rs
+index 868b439..92a111f 100755
+--- a/results/src/instructions/marginfi_group/configure.rs
++++ b/results/src/instructions/astrolend_group/configure.rs
+@@ -1,26 +1,26 @@
+ use crate::check;
+-use crate::events::{GroupEventHeader, MarginfiGroupConfigureEvent};
+-use crate::prelude::MarginfiError;
+-use crate::state::marginfi_account::{
+-    MarginfiAccount, FLASHLOAN_ENABLED_FLAG, TRANSFER_AUTHORITY_ALLOWED_FLAG,
++use crate::events::{GroupEventHeader, AstrolendGroupConfigureEvent};
++use crate::prelude::AstrolendError;
++use crate::state::astrolend_account::{
++    AstrolendAccount, FLASHLOAN_ENABLED_FLAG, TRANSFER_AUTHORITY_ALLOWED_FLAG,
+ };
+ use crate::{
+-    state::marginfi_group::{GroupConfig, MarginfiGroup},
+-    MarginfiResult,
++    state::astrolend_group::{GroupConfig, AstrolendGroup},
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ 
+-/// Configure margin group
++/// Configure astrol group
+ ///
+ /// Admin only
+-pub fn configure(ctx: Context<MarginfiGroupConfigure>, config: GroupConfig) -> MarginfiResult {
+-    let marginfi_group = &mut ctx.accounts.marginfi_group.load_mut()?;
++pub fn configure(ctx: Context<AstrolendGroupConfigure>, config: GroupConfig) -> AstrolendResult {
++    let astrolend_group = &mut ctx.accounts.astrolend_group.load_mut()?;
+ 
+-    marginfi_group.configure(&config)?;
++    astrolend_group.configure(&config)?;
+ 
+-    emit!(MarginfiGroupConfigureEvent {
++    emit!(AstrolendGroupConfigureEvent {
+         header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+             signer: Some(*ctx.accounts.admin.key)
+         },
+         config,
+@@ -30,12 +30,12 @@ pub fn configure(ctx: Context<MarginfiGroupConfigure>, config: GroupConfig) -> M
+ }
+ 
+ #[derive(Accounts)]
+-pub struct MarginfiGroupConfigure<'info> {
++pub struct AstrolendGroupConfigure<'info> {
+     #[account(mut)]
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ }
+@@ -58,55 +58,55 @@ fn flag_can_be_set(flag: u64) -> bool {
+     (flag & !CONFIGURABLE_FLAGS) == 0
+ }
+ 
+-pub fn set_account_flag(ctx: Context<SetAccountFlag>, flag: u64) -> MarginfiResult {
+-    check!(flag_can_be_set(flag), MarginfiError::IllegalFlag);
++pub fn set_account_flag(ctx: Context<SetAccountFlag>, flag: u64) -> AstrolendResult {
++    check!(flag_can_be_set(flag), AstrolendError::IllegalFlag);
+ 
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
+ 
+-    marginfi_account.set_flag(flag);
++    astrolend_account.set_flag(flag);
+ 
+     Ok(())
+ }
+ 
+ #[derive(Accounts)]
+ pub struct SetAccountFlag<'info> {
+-    #[account(address = marginfi_account.load()?.group)]
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    #[account(address = astrolend_account.load()?.group)]
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(mut)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     /// Admin only
+-    #[account(address = marginfi_group.load()?.admin)]
++    #[account(address = astrolend_group.load()?.admin)]
+     pub admin: Signer<'info>,
+ }
+ 
+-pub fn unset_account_flag(ctx: Context<UnsetAccountFlag>, flag: u64) -> MarginfiResult {
+-    check!(flag_can_be_set(flag), MarginfiError::IllegalFlag);
++pub fn unset_account_flag(ctx: Context<UnsetAccountFlag>, flag: u64) -> AstrolendResult {
++    check!(flag_can_be_set(flag), AstrolendError::IllegalFlag);
+ 
+-    let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
++    let mut astrolend_account = ctx.accounts.astrolend_account.load_mut()?;
+ 
+-    marginfi_account.unset_flag(flag);
++    astrolend_account.unset_flag(flag);
+ 
+     Ok(())
+ }
+ 
+ #[derive(Accounts)]
+ pub struct UnsetAccountFlag<'info> {
+-    #[account(address = marginfi_account.load()?.group)]
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    #[account(address = astrolend_account.load()?.group)]
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(mut)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     /// Admin only
+-    #[account(address = marginfi_group.load()?.admin)]
++    #[account(address = astrolend_group.load()?.admin)]
+     pub admin: Signer<'info>,
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+-    use crate::state::marginfi_account::{
++    use crate::state::astrolend_account::{
+         DISABLED_FLAG, FLASHLOAN_ENABLED_FLAG, IN_FLASHLOAN_FLAG, TRANSFER_AUTHORITY_ALLOWED_FLAG,
+     };
+ 
+diff --git a/results/src/instructions/marginfi_group/configure_bank.rs b/results/src/instructions/astrolend_group/configure_bank.rs
+similarity index 84%
+rename from results/src/instructions/marginfi_group/configure_bank.rs
+rename to results/src/instructions/astrolend_group/configure_bank.rs
+index c5b0465..1d1f16f 100755
+--- a/results/src/instructions/marginfi_group/configure_bank.rs
++++ b/results/src/instructions/astrolend_group/configure_bank.rs
+@@ -1,10 +1,10 @@
+ use crate::constants::{EMISSIONS_AUTH_SEED, EMISSIONS_TOKEN_ACCOUNT_SEED};
+ use crate::events::{GroupEventHeader, LendingPoolBankConfigureEvent};
+-use crate::prelude::MarginfiError;
++use crate::prelude::AstrolendError;
+ use crate::{check, math_error, utils};
+ use crate::{
+-    state::marginfi_group::{Bank, BankConfigOpt, MarginfiGroup},
+-    MarginfiResult,
++    state::astrolend_group::{Bank, BankConfigOpt, AstrolendGroup},
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ use anchor_spl::token_2022::{transfer_checked, TransferChecked};
+@@ -14,7 +14,7 @@ use fixed::types::I80F48;
+ pub fn lending_pool_configure_bank(
+     ctx: Context<LendingPoolConfigureBank>,
+     bank_config: BankConfigOpt,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let mut bank = ctx.accounts.bank.load_mut()?;
+ 
+     bank.configure(&bank_config)?;
+@@ -25,7 +25,7 @@ pub fn lending_pool_configure_bank(
+ 
+     emit!(LendingPoolBankConfigureEvent {
+         header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
++            astrolend_group: ctx.accounts.astrolend_group.key(),
+             signer: Some(*ctx.accounts.admin.key)
+         },
+         bank: ctx.accounts.bank.key(),
+@@ -38,16 +38,16 @@ pub fn lending_pool_configure_bank(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolConfigureBank<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ }
+@@ -57,12 +57,12 @@ pub fn lending_pool_setup_emissions(
+     emissions_flags: u64,
+     emissions_rate: u64,
+     total_emissions: u64,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let mut bank = ctx.accounts.bank.load_mut()?;
+ 
+     check!(
+         bank.emissions_mint.eq(&Pubkey::default()),
+-        MarginfiError::EmissionsAlreadySetup
++        AstrolendError::EmissionsAlreadySetup
+     );
+ 
+     bank.emissions_mint = ctx.accounts.emissions_mint.key();
+@@ -97,17 +97,17 @@ pub fn lending_pool_setup_emissions(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolSetupEmissions<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+@@ -151,17 +151,17 @@ pub fn lending_pool_update_emissions_parameters(
+     emissions_flags: Option<u64>,
+     emissions_rate: Option<u64>,
+     additional_emissions: Option<u64>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let mut bank = ctx.accounts.bank.load_mut()?;
+ 
+     check!(
+         bank.emissions_mint.ne(&Pubkey::default()),
+-        MarginfiError::EmissionsUpdateError
++        AstrolendError::EmissionsUpdateError
+     );
+ 
+     check!(
+         bank.emissions_mint.eq(&ctx.accounts.emissions_mint.key()),
+-        MarginfiError::EmissionsUpdateError
++        AstrolendError::EmissionsUpdateError
+     );
+ 
+     if let Some(flags) = emissions_flags {
+@@ -212,17 +212,17 @@ pub fn lending_pool_update_emissions_parameters(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolUpdateEmissionsParameters<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+     #[account(
+         mut,
+-        address = marginfi_group.load()?.admin,
++        address = astrolend_group.load()?.admin,
+     )]
+     pub admin: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+diff --git a/results/src/instructions/marginfi_group/handle_bankruptcy.rs b/results/src/instructions/astrolend_group/handle_bankruptcy.rs
+similarity index 77%
+rename from results/src/instructions/marginfi_group/handle_bankruptcy.rs
+rename to results/src/instructions/astrolend_group/handle_bankruptcy.rs
+index 8c01dfe..300b18e 100755
+--- a/results/src/instructions/marginfi_group/handle_bankruptcy.rs
++++ b/results/src/instructions/astrolend_group/handle_bankruptcy.rs
+@@ -7,19 +7,19 @@ use crate::{
+     debug,
+     events::{AccountEventHeader, LendingPoolBankHandleBankruptcyEvent},
+     math_error,
+-    prelude::MarginfiError,
++    prelude::AstrolendError,
+     state::{
+-        marginfi_account::{BankAccountWrapper, MarginfiAccount, RiskEngine, DISABLED_FLAG},
+-        marginfi_group::{Bank, BankVaultType, MarginfiGroup},
++        astrolend_account::{BankAccountWrapper, AstrolendAccount, RiskEngine, DISABLED_FLAG},
++        astrolend_group::{Bank, BankVaultType, AstrolendGroup},
+     },
+-    utils, MarginfiResult,
++    utils, AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ use anchor_spl::token_interface::{TokenAccount, TokenInterface};
+ use fixed::types::I80F48;
+ use std::cmp::{max, min};
+ 
+-/// Handle a bankrupt marginfi account.
++/// Handle a bankrupt astrolend account.
+ /// 1. Verify account is bankrupt, and lending account belonging to account contains bad debt.
+ /// 2. Determine the amount of bad debt covered by the insurance fund and the amount socialized between depositors.
+ /// 3. Cover the bad debt of the bankrupt account.
+@@ -27,13 +27,13 @@ use std::cmp::{max, min};
+ /// 5. Socialize the loss between lenders if any.
+ pub fn lending_pool_handle_bankruptcy<'info>(
+     mut ctx: Context<'_, '_, 'info, 'info, LendingPoolHandleBankruptcy<'info>>,
+-) -> MarginfiResult {
++) -> AstrolendResult {
+     let LendingPoolHandleBankruptcy {
+-        marginfi_account: marginfi_account_loader,
++        astrolend_account: astrolend_account_loader,
+         insurance_vault,
+         token_program,
+         bank: bank_loader,
+-        marginfi_group: marginfi_group_loader,
++        astrolend_group: astrolend_group_loader,
+         ..
+     } = ctx.accounts;
+     let bank = bank_loader.load()?;
+@@ -44,16 +44,16 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+ 
+     if !bank.get_flag(PERMISSIONLESS_BAD_DEBT_SETTLEMENT_FLAG) {
+         check!(
+-            ctx.accounts.signer.key() == marginfi_group_loader.load()?.admin,
+-            MarginfiError::Unauthorized
++            ctx.accounts.signer.key() == astrolend_group_loader.load()?.admin,
++            AstrolendError::Unauthorized
+         );
+     }
+ 
+     drop(bank);
+ 
+-    let mut marginfi_account = marginfi_account_loader.load_mut()?;
++    let mut astrolend_account = astrolend_account_loader.load_mut()?;
+ 
+-    RiskEngine::new(&marginfi_account, ctx.remaining_accounts)?.check_account_bankrupt()?;
++    RiskEngine::new(&astrolend_account, ctx.remaining_accounts)?.check_account_bankrupt()?;
+ 
+     let mut bank = bank_loader.load_mut()?;
+ 
+@@ -63,7 +63,7 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+         bank_loader.key(),
+     )?;
+ 
+-    let lending_account_balance = marginfi_account
++    let lending_account_balance = astrolend_account
+         .lending_account
+         .balances
+         .iter_mut()
+@@ -71,7 +71,7 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+ 
+     check!(
+         lending_account_balance.is_some(),
+-        MarginfiError::LendingAccountBalanceNotFound
++        AstrolendError::LendingAccountBalanceNotFound
+     );
+ 
+     let lending_account_balance = lending_account_balance.unwrap();
+@@ -80,7 +80,7 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+ 
+     check!(
+         bad_debt > ZERO_AMOUNT_THRESHOLD,
+-        MarginfiError::BalanceNotBadDebt
++        AstrolendError::BalanceNotBadDebt
+     );
+ 
+     let (covered_by_insurance, socialized_loss) = {
+@@ -149,18 +149,18 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+     BankAccountWrapper::find_or_create(
+         &bank_loader.key(),
+         &mut bank,
+-        &mut marginfi_account.lending_account,
++        &mut astrolend_account.lending_account,
+     )?
+     .repay(bad_debt)?;
+ 
+-    marginfi_account.set_flag(DISABLED_FLAG);
++    astrolend_account.set_flag(DISABLED_FLAG);
+ 
+     emit!(LendingPoolBankHandleBankruptcyEvent {
+         header: AccountEventHeader {
+             signer: Some(ctx.accounts.signer.key()),
+-            marginfi_account: marginfi_account_loader.key(),
+-            marginfi_account_authority: marginfi_account.authority,
+-            marginfi_group: marginfi_account.group,
++            astrolend_account: astrolend_account_loader.key(),
++            astrolend_account_authority: astrolend_account.authority,
++            astrolend_group: astrolend_account.group,
+         },
+         bank: bank_loader.key(),
+         mint: bank.mint,
+@@ -174,22 +174,22 @@ pub fn lending_pool_handle_bankruptcy<'info>(
+ 
+ #[derive(Accounts)]
+ pub struct LendingPoolHandleBankruptcy<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
+ 
+-    // #[account(address = marginfi_group.load()?.admin)]
++    // #[account(address = astrolend_group.load()?.admin)]
+     pub signer: Signer<'info>,
+ 
+     #[account(
+         mut,
+-        constraint = bank.load()?.group == marginfi_group.key(),
++        constraint = bank.load()?.group == astrolend_group.key(),
+     )]
+     pub bank: AccountLoader<'info, Bank>,
+ 
+     #[account(
+         mut,
+-        constraint = marginfi_account.load()?.group == marginfi_group.key(),
++        constraint = astrolend_account.load()?.group == astrolend_group.key(),
+     )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
++    pub astrolend_account: AccountLoader<'info, AstrolendAccount>,
+ 
+     /// CHECK: Seed constraint
+     #[account(
+diff --git a/results/src/instructions/astrolend_group/initialize.rs b/results/src/instructions/astrolend_group/initialize.rs
+new file mode 100755
+index 0000000..be730ca
+--- /dev/null
++++ b/results/src/instructions/astrolend_group/initialize.rs
+@@ -0,0 +1,33 @@
++use crate::events::{GroupEventHeader, AstrolendGroupCreateEvent};
++use crate::{state::astrolend_group::AstrolendGroup, AstrolendResult};
++use anchor_lang::prelude::*;
++
++pub fn initialize_group(ctx: Context<AstrolendGroupInitialize>) -> AstrolendResult {
++    let astrolend_group = &mut ctx.accounts.astrolend_group.load_init()?;
++
++    astrolend_group.set_initial_configuration(ctx.accounts.admin.key());
++
++    emit!(AstrolendGroupCreateEvent {
++        header: GroupEventHeader {
++            astrolend_group: ctx.accounts.astrolend_group.key(),
++            signer: Some(*ctx.accounts.admin.key)
++        },
++    });
++
++    Ok(())
++}
++
++#[derive(Accounts)]
++pub struct AstrolendGroupInitialize<'info> {
++    #[account(
++        init,
++        payer = admin,
++        space = 8 + std::mem::size_of::<AstrolendGroup>(),
++    )]
++    pub astrolend_group: AccountLoader<'info, AstrolendGroup>,
++
++    #[account(mut)]
++    pub admin: Signer<'info>,
++
++    pub system_program: Program<'info, System>,
++}
+diff --git a/results/src/instructions/marginfi_group/mod.rs b/results/src/instructions/astrolend_group/mod.rs
+similarity index 100%
+rename from results/src/instructions/marginfi_group/mod.rs
+rename to results/src/instructions/astrolend_group/mod.rs
+diff --git a/results/src/instructions/marginfi_account/close.rs b/results/src/instructions/marginfi_account/close.rs
+deleted file mode 100755
+index 5006d29..0000000
+--- a/results/src/instructions/marginfi_account/close.rs
++++ /dev/null
+@@ -1,25 +0,0 @@
+-use anchor_lang::prelude::*;
+-
+-use crate::{check, state::marginfi_account::MarginfiAccount, MarginfiError, MarginfiResult};
+-
+-pub fn close_account(ctx: Context<MarginfiAccountClose>) -> MarginfiResult {
+-    let marginfi_account = &ctx.accounts.marginfi_account.load()?;
+-
+-    check!(
+-        marginfi_account.can_be_closed(),
+-        MarginfiError::IllegalAction,
+-        "Account cannot be closed"
+-    );
+-
+-    Ok(())
+-}
+-
+-#[derive(Accounts)]
+-pub struct MarginfiAccountClose<'info> {
+-    #[account(mut, close = fee_payer)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
+-    #[account(address = marginfi_account.load()?.authority)]
+-    pub authority: Signer<'info>,
+-    #[account(mut)]
+-    pub fee_payer: Signer<'info>,
+-}
+diff --git a/results/src/instructions/marginfi_account/initialize.rs b/results/src/instructions/marginfi_account/initialize.rs
+deleted file mode 100755
+index 051f5cd..0000000
+--- a/results/src/instructions/marginfi_account/initialize.rs
++++ /dev/null
+@@ -1,50 +0,0 @@
+-use crate::{
+-    events::{AccountEventHeader, MarginfiAccountCreateEvent},
+-    prelude::*,
+-    state::marginfi_account::MarginfiAccount,
+-};
+-use anchor_lang::prelude::*;
+-use solana_program::sysvar::Sysvar;
+-
+-pub fn initialize_account(ctx: Context<MarginfiAccountInitialize>) -> MarginfiResult {
+-    let MarginfiAccountInitialize {
+-        authority,
+-        marginfi_group,
+-        marginfi_account: marginfi_account_loader,
+-        ..
+-    } = ctx.accounts;
+-
+-    let mut marginfi_account = marginfi_account_loader.load_init()?;
+-
+-    marginfi_account.initialize(marginfi_group.key(), authority.key());
+-
+-    emit!(MarginfiAccountCreateEvent {
+-        header: AccountEventHeader {
+-            signer: Some(authority.key()),
+-            marginfi_account: marginfi_account_loader.key(),
+-            marginfi_account_authority: marginfi_account.authority,
+-            marginfi_group: marginfi_account.group,
+-        }
+-    });
+-
+-    Ok(())
+-}
+-
+-#[derive(Accounts)]
+-pub struct MarginfiAccountInitialize<'info> {
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
+-
+-    #[account(
+-        init,
+-        payer = fee_payer,
+-        space = 8 + std::mem::size_of::<MarginfiAccount>()
+-    )]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
+-
+-    pub authority: Signer<'info>,
+-
+-    #[account(mut)]
+-    pub fee_payer: Signer<'info>,
+-
+-    pub system_program: Program<'info, System>,
+-}
+diff --git a/results/src/instructions/marginfi_account/transfer_authority.rs b/results/src/instructions/marginfi_account/transfer_authority.rs
+deleted file mode 100755
+index 6209341..0000000
+--- a/results/src/instructions/marginfi_account/transfer_authority.rs
++++ /dev/null
+@@ -1,40 +0,0 @@
+-use crate::{prelude::*, state::marginfi_account::MarginfiAccount};
+-use anchor_lang::prelude::*;
+-
+-pub fn set_account_transfer_authority(
+-    ctx: Context<MarginfiAccountSetAccountAuthority>,
+-) -> MarginfiResult {
+-    // Ensure marginfi_account is dropped out of scope to not exceed stack frame limits
+-    {
+-        let mut marginfi_account = ctx.accounts.marginfi_account.load_mut()?;
+-        let new_account_authority = ctx.accounts.new_authority.key();
+-        marginfi_account.set_new_account_authority_checked(new_account_authority)?;
+-    }
+-
+-    // TODO: add back event (dropped for memory reasons)
+-
+-    Ok(())
+-}
+-
+-#[derive(Accounts)]
+-pub struct MarginfiAccountSetAccountAuthority<'info> {
+-    #[account(mut)]
+-    pub marginfi_account: AccountLoader<'info, MarginfiAccount>,
+-
+-    /// CHECK: The group is confirmed by the address macro
+-    #[account(
+-        address = marginfi_account.load()?.group,
+-    )]
+-    pub marginfi_group: AccountInfo<'info>,
+-
+-    #[account(
+-        address = marginfi_account.load()?.authority,
+-    )]
+-    pub signer: Signer<'info>,
+-
+-    /// CHECK: The new account authority doesn't need explicit checks
+-    pub new_authority: AccountInfo<'info>,
+-
+-    #[account(mut)]
+-    pub fee_payer: Signer<'info>,
+-}
+diff --git a/results/src/instructions/marginfi_group/initialize.rs b/results/src/instructions/marginfi_group/initialize.rs
+deleted file mode 100755
+index 209ed24..0000000
+--- a/results/src/instructions/marginfi_group/initialize.rs
++++ /dev/null
+@@ -1,33 +0,0 @@
+-use crate::events::{GroupEventHeader, MarginfiGroupCreateEvent};
+-use crate::{state::marginfi_group::MarginfiGroup, MarginfiResult};
+-use anchor_lang::prelude::*;
+-
+-pub fn initialize_group(ctx: Context<MarginfiGroupInitialize>) -> MarginfiResult {
+-    let marginfi_group = &mut ctx.accounts.marginfi_group.load_init()?;
+-
+-    marginfi_group.set_initial_configuration(ctx.accounts.admin.key());
+-
+-    emit!(MarginfiGroupCreateEvent {
+-        header: GroupEventHeader {
+-            marginfi_group: ctx.accounts.marginfi_group.key(),
+-            signer: Some(*ctx.accounts.admin.key)
+-        },
+-    });
+-
+-    Ok(())
+-}
+-
+-#[derive(Accounts)]
+-pub struct MarginfiGroupInitialize<'info> {
+-    #[account(
+-        init,
+-        payer = admin,
+-        space = 8 + std::mem::size_of::<MarginfiGroup>(),
+-    )]
+-    pub marginfi_group: AccountLoader<'info, MarginfiGroup>,
+-
+-    #[account(mut)]
+-    pub admin: Signer<'info>,
+-
+-    pub system_program: Program<'info, System>,
+-}
+diff --git a/results/src/instructions/mod.rs b/results/src/instructions/mod.rs
+index d228788..5b292f6 100755
+--- a/results/src/instructions/mod.rs
++++ b/results/src/instructions/mod.rs
+@@ -1,5 +1,5 @@
+-pub mod marginfi_account;
+-pub mod marginfi_group;
++pub mod astrolend_account;
++pub mod astrolend_group;
+ 
+-pub use marginfi_account::*;
+-pub use marginfi_group::*;
++pub use astrolend_account::*;
++pub use astrolend_group::*;
+diff --git a/results/src/lib.rs b/results/src/lib.rs
+index 31a7bf8..5383e16 100755
+--- a/results/src/lib.rs
++++ b/results/src/lib.rs
+@@ -10,11 +10,11 @@ pub mod utils;
+ use anchor_lang::prelude::*;
+ use instructions::*;
+ use prelude::*;
+-use state::marginfi_group::{BankConfigCompact, BankConfigOpt};
++use state::astrolend_group::{BankConfigCompact, BankConfigOpt};
+ 
+ cfg_if::cfg_if! {
+     if #[cfg(feature = "mainnet-beta")] {
+-        declare_id!("MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA");
++        declare_id!("Astro1oWvtB7cBTwi3efLMFB47WXx7DJDQeoxi235kA");
+     } else if #[cfg(feature = "devnet")] {
+         declare_id!("neetcne3Ctrrud7vLdt2ypMm21gZHGN2mCmqWaMVcBQ");
+     } else if #[cfg(feature = "staging")] {
+@@ -25,25 +25,25 @@ cfg_if::cfg_if! {
+ }
+ 
+ #[program]
+-pub mod marginfi {
++pub mod astrolend {
+     use super::*;
+ 
+-    pub fn marginfi_group_initialize(ctx: Context<MarginfiGroupInitialize>) -> MarginfiResult {
+-        marginfi_group::initialize_group(ctx)
++    pub fn astrolend_group_initialize(ctx: Context<AstrolendGroupInitialize>) -> AstrolendResult {
++        astrolend_group::initialize_group(ctx)
+     }
+ 
+-    pub fn marginfi_group_configure(
+-        ctx: Context<MarginfiGroupConfigure>,
++    pub fn astrolend_group_configure(
++        ctx: Context<AstrolendGroupConfigure>,
+         config: GroupConfig,
+-    ) -> MarginfiResult {
+-        marginfi_group::configure(ctx, config)
++    ) -> AstrolendResult {
++        astrolend_group::configure(ctx, config)
+     }
+ 
+     pub fn lending_pool_add_bank(
+         ctx: Context<LendingPoolAddBank>,
+         bank_config: BankConfigCompact,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_add_bank(ctx, bank_config.into())
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_add_bank(ctx, bank_config.into())
+     }
+ 
+     /// A copy of lending_pool_add_bank with an additional bank seed.
+@@ -53,15 +53,15 @@ pub mod marginfi {
+         ctx: Context<LendingPoolAddBankWithSeed>,
+         bank_config: BankConfigCompact,
+         bank_seed: u64,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_add_bank_with_seed(ctx, bank_config.into(), bank_seed)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_add_bank_with_seed(ctx, bank_config.into(), bank_seed)
+     }
+ 
+     pub fn lending_pool_configure_bank(
+         ctx: Context<LendingPoolConfigureBank>,
+         bank_config_opt: BankConfigOpt,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_configure_bank(ctx, bank_config_opt)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_configure_bank(ctx, bank_config_opt)
+     }
+ 
+     pub fn lending_pool_setup_emissions(
+@@ -69,8 +69,8 @@ pub mod marginfi {
+         flags: u64,
+         rate: u64,
+         total_emissions: u64,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_setup_emissions(ctx, flags, rate, total_emissions)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_setup_emissions(ctx, flags, rate, total_emissions)
+     }
+ 
+     pub fn lending_pool_update_emissions_parameters(
+@@ -78,8 +78,8 @@ pub mod marginfi {
+         emissions_flags: Option<u64>,
+         emissions_rate: Option<u64>,
+         additional_emissions: Option<u64>,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_update_emissions_parameters(
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_update_emissions_parameters(
+             ctx,
+             emissions_flags,
+             emissions_rate,
+@@ -87,132 +87,134 @@ pub mod marginfi {
+         )
+     }
+ 
+-    /// Handle bad debt of a bankrupt marginfi account for a given bank.
++    /// Handle bad debt of a bankrupt astrolend account for a given bank.
+     pub fn lending_pool_handle_bankruptcy<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingPoolHandleBankruptcy<'info>>,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_handle_bankruptcy(ctx)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_handle_bankruptcy(ctx)
+     }
+ 
+     // User instructions
+ 
+-    /// Initialize a marginfi account for a given group
+-    pub fn marginfi_account_initialize(ctx: Context<MarginfiAccountInitialize>) -> MarginfiResult {
+-        marginfi_account::initialize_account(ctx)
++    /// Initialize a astrolend account for a given group
++    pub fn astrolend_account_initialize(
++        ctx: Context<AstrolendAccountInitialize>,
++    ) -> AstrolendResult {
++        astrolend_account::initialize_account(ctx)
+     }
+ 
+     pub fn lending_account_deposit<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountDeposit<'info>>,
+         amount: u64,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_deposit(ctx, amount)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_deposit(ctx, amount)
+     }
+ 
+     pub fn lending_account_repay<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountRepay<'info>>,
+         amount: u64,
+         repay_all: Option<bool>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_repay(ctx, amount, repay_all)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_repay(ctx, amount, repay_all)
+     }
+ 
+     pub fn lending_account_withdraw<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountWithdraw<'info>>,
+         amount: u64,
+         withdraw_all: Option<bool>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_withdraw(ctx, amount, withdraw_all)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_withdraw(ctx, amount, withdraw_all)
+     }
+ 
+     pub fn lending_account_borrow<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountBorrow<'info>>,
+         amount: u64,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_borrow(ctx, amount)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_borrow(ctx, amount)
+     }
+ 
+     pub fn lending_account_close_balance(
+         ctx: Context<LendingAccountCloseBalance>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_close_balance(ctx)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_close_balance(ctx)
+     }
+ 
+     pub fn lending_account_withdraw_emissions<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountWithdrawEmissions<'info>>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_withdraw_emissions(ctx)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_withdraw_emissions(ctx)
+     }
+ 
+     pub fn lending_account_settle_emissions(
+         ctx: Context<LendingAccountSettleEmissions>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_settle_emissions(ctx)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_settle_emissions(ctx)
+     }
+ 
+-    /// Liquidate a lending account balance of an unhealthy marginfi account
++    /// Liquidate a lending account balance of an unhealthy astrolend account
+     pub fn lending_account_liquidate<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountLiquidate<'info>>,
+         asset_amount: u64,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_liquidate(ctx, asset_amount)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_liquidate(ctx, asset_amount)
+     }
+ 
+     pub fn lending_account_start_flashloan(
+         ctx: Context<LendingAccountStartFlashloan>,
+         end_index: u64,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_start_flashloan(ctx, end_index)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_start_flashloan(ctx, end_index)
+     }
+ 
+     pub fn lending_account_end_flashloan<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingAccountEndFlashloan<'info>>,
+-    ) -> MarginfiResult {
+-        marginfi_account::lending_account_end_flashloan(ctx)
++    ) -> AstrolendResult {
++        astrolend_account::lending_account_end_flashloan(ctx)
+     }
+ 
+     // Operational instructions
+     pub fn lending_pool_accrue_bank_interest(
+         ctx: Context<LendingPoolAccrueBankInterest>,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_accrue_bank_interest(ctx)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_accrue_bank_interest(ctx)
+     }
+ 
+     pub fn lending_pool_collect_bank_fees<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingPoolCollectBankFees<'info>>,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_collect_bank_fees(ctx)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_collect_bank_fees(ctx)
+     }
+ 
+     pub fn lending_pool_withdraw_fees<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingPoolWithdrawFees<'info>>,
+         amount: u64,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_withdraw_fees(ctx, amount)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_withdraw_fees(ctx, amount)
+     }
+ 
+     pub fn lending_pool_withdraw_insurance<'info>(
+         ctx: Context<'_, '_, 'info, 'info, LendingPoolWithdrawInsurance<'info>>,
+         amount: u64,
+-    ) -> MarginfiResult {
+-        marginfi_group::lending_pool_withdraw_insurance(ctx, amount)
++    ) -> AstrolendResult {
++        astrolend_group::lending_pool_withdraw_insurance(ctx, amount)
+     }
+ 
+-    pub fn set_account_flag(ctx: Context<SetAccountFlag>, flag: u64) -> MarginfiResult {
+-        marginfi_group::set_account_flag(ctx, flag)
++    pub fn set_account_flag(ctx: Context<SetAccountFlag>, flag: u64) -> AstrolendResult {
++        astrolend_group::set_account_flag(ctx, flag)
+     }
+ 
+-    pub fn unset_account_flag(ctx: Context<UnsetAccountFlag>, flag: u64) -> MarginfiResult {
+-        marginfi_group::unset_account_flag(ctx, flag)
++    pub fn unset_account_flag(ctx: Context<UnsetAccountFlag>, flag: u64) -> AstrolendResult {
++        astrolend_group::unset_account_flag(ctx, flag)
+     }
+ 
+     pub fn set_new_account_authority(
+-        ctx: Context<MarginfiAccountSetAccountAuthority>,
+-    ) -> MarginfiResult {
+-        marginfi_account::set_account_transfer_authority(ctx)
++        ctx: Context<AstrolendAccountSetAccountAuthority>,
++    ) -> AstrolendResult {
++        astrolend_account::set_account_transfer_authority(ctx)
+     }
+ 
+-    pub fn marginfi_account_close(ctx: Context<MarginfiAccountClose>) -> MarginfiResult {
+-        marginfi_account::close_account(ctx)
++    pub fn astrolend_account_close(ctx: Context<AstrolendAccountClose>) -> AstrolendResult {
++        astrolend_account::close_account(ctx)
+     }
+ }
+ 
+@@ -220,10 +222,9 @@ pub mod marginfi {
+ use solana_security_txt::security_txt;
+ #[cfg(not(feature = "no-entrypoint"))]
+ security_txt! {
+-    name: "marginfi v2",
+-    project_url: "https://app.marginfi.com/",
+-    contacts: "email:security@mrgn.group",
+-    policy: "https://github.com/mrgnlabs/marginfi-v2/blob/main/SECURITY.md",
+-    preferred_languages: "en",
+-    source_code: "https://github.com/mrgnlabs/marginfi-v2"
++    name: "astrolend",
++    project_url: "https://app.astrol.io/",
++    contacts: "email:team@astrol.io",
++    policy: "https://astrol.io/security-policy",
++    preferred_languages: "en"
+ }
+diff --git a/results/src/macros.rs b/results/src/macros.rs
+index 237e9c4..89e88f3 100755
+--- a/results/src/macros.rs
++++ b/results/src/macros.rs
+@@ -4,7 +4,7 @@
+ macro_rules! check {
+     ($cond:expr, $err:expr) => {
+         if !($cond) {
+-            let error_code: $crate::errors::MarginfiError = $err;
++            let error_code: $crate::errors::AstrolendError = $err;
+             #[cfg(not(feature = "test-bpf"))]
+             anchor_lang::prelude::msg!(
+                 "Error \"{}\" thrown at {}:{}",
+@@ -18,7 +18,7 @@ macro_rules! check {
+ 
+     ($cond:expr, $err:expr, $($arg:tt)*) => {
+         if !($cond) {
+-            let error_code: $crate::errors::MarginfiError = $err;
++            let error_code: $crate::errors::AstrolendError = $err;
+             #[cfg(not(feature = "test-bpf"))]
+             anchor_lang::prelude::msg!(
+                 "Error \"{}\" thrown at {}:{}",
+@@ -37,7 +37,7 @@ macro_rules! check {
+ macro_rules! math_error {
+     () => {{
+         || {
+-            let error_code = $crate::errors::MarginfiError::MathError;
++            let error_code = $crate::errors::AstrolendError::MathError;
+             anchor_lang::prelude::msg!(
+                 "Error \"{}\" thrown at {}:{}",
+                 error_code,
+diff --git a/results/src/prelude.rs b/results/src/prelude.rs
+index 2d1be00..cbcce01 100755
+--- a/results/src/prelude.rs
++++ b/results/src/prelude.rs
+@@ -1,8 +1,8 @@
+ use anchor_lang::prelude::*;
+ 
+-pub type MarginfiResult<G = ()> = Result<G>;
++pub type AstrolendResult<G = ()> = Result<G>;
+ 
+ pub use crate::{
+-    errors::MarginfiError,
+-    state::marginfi_group::{GroupConfig, MarginfiGroup},
++    errors::AstrolendError,
++    state::astrolend_group::{GroupConfig, AstrolendGroup},
+ };
+diff --git a/results/src/state/marginfi_account.rs b/results/src/state/astrolend_account.rs
+similarity index 87%
+rename from results/src/state/marginfi_account.rs
+rename to results/src/state/astrolend_account.rs
+index 2238df2..0b708ca 100755
+--- a/results/src/state/marginfi_account.rs
++++ b/results/src/state/astrolend_account.rs
+@@ -1,5 +1,5 @@
+ use super::{
+-    marginfi_group::{Bank, RiskTier, WrappedI80F48},
++    astrolend_group::{Bank, RiskTier, WrappedI80F48},
+     price::{OraclePriceFeedAdapter, OraclePriceType, PriceAdapter, PriceBias},
+ };
+ use crate::{
+@@ -10,7 +10,7 @@ use crate::{
+         ZERO_AMOUNT_THRESHOLD,
+     },
+     debug, math_error,
+-    prelude::{MarginfiError, MarginfiResult},
++    prelude::{AstrolendError, AstrolendResult},
+     utils::NumTraitsWithTolerance,
+ };
+ use anchor_lang::prelude::*;
+@@ -23,15 +23,15 @@ use std::{
+ #[cfg(any(feature = "test", feature = "client"))]
+ use type_layout::TypeLayout;
+ 
+-assert_struct_size!(MarginfiAccount, 2304);
+-assert_struct_align!(MarginfiAccount, 8);
++assert_struct_size!(AstrolendAccount, 2304);
++assert_struct_align!(AstrolendAccount, 8);
+ #[account(zero_copy(unsafe))]
+ #[repr(C)]
+ #[cfg_attr(
+     any(feature = "test", feature = "client"),
+     derive(Debug, PartialEq, Eq, TypeLayout)
+ )]
+-pub struct MarginfiAccount {
++pub struct AstrolendAccount {
+     pub group: Pubkey,                   // 32
+     pub authority: Pubkey,               // 32
+     pub lending_account: LendingAccount, // 1728
+@@ -50,8 +50,8 @@ pub const IN_FLASHLOAN_FLAG: u64 = 1 << 1;
+ pub const FLASHLOAN_ENABLED_FLAG: u64 = 1 << 2;
+ pub const TRANSFER_AUTHORITY_ALLOWED_FLAG: u64 = 1 << 3;
+ 
+-impl MarginfiAccount {
+-    /// Set the initial data for the marginfi account.
++impl AstrolendAccount {
++    /// Set the initial data for the astrolend account.
+     pub fn initialize(&mut self, group: Pubkey, authority: Pubkey) {
+         self.authority = authority;
+         self.group = group;
+@@ -80,10 +80,10 @@ impl MarginfiAccount {
+         self.account_flags & flag != 0
+     }
+ 
+-    pub fn set_new_account_authority_checked(&mut self, new_authority: Pubkey) -> MarginfiResult {
++    pub fn set_new_account_authority_checked(&mut self, new_authority: Pubkey) -> AstrolendResult {
+         // check if new account authority flag is set
+         if !self.get_flag(TRANSFER_AUTHORITY_ALLOWED_FLAG) || self.get_flag(DISABLED_FLAG) {
+-            return Err(MarginfiError::IllegalAccountAuthorityTransfer.into());
++            return Err(AstrolendError::IllegalAccountAuthorityTransfer.into());
+         }
+ 
+         // update account authority
+@@ -152,7 +152,7 @@ impl RequirementType {
+ 
+ pub struct BankAccountWithPriceFeed<'a, 'info> {
+     bank: AccountInfo<'info>,
+-    price_feed: Box<MarginfiResult<OraclePriceFeedAdapter>>,
++    price_feed: Box<AstrolendResult<OraclePriceFeedAdapter>>,
+     balance: &'a Balance,
+ }
+ 
+@@ -165,7 +165,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+     pub fn load<'a>(
+         lending_account: &'a LendingAccount,
+         remaining_ais: &'info [AccountInfo<'info>],
+-    ) -> MarginfiResult<Vec<BankAccountWithPriceFeed<'a, 'info>>> {
++    ) -> AstrolendResult<Vec<BankAccountWithPriceFeed<'a, 'info>>> {
+         let active_balances = lending_account
+             .balances
+             .iter()
+@@ -177,7 +177,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+ 
+         check!(
+             active_balances.len() * 2 <= remaining_ais.len(),
+-            MarginfiError::MissingPythOrBankAccount
++            AstrolendError::MissingPythOrBankAccount
+         );
+ 
+         let clock = Clock::get()?;
+@@ -193,7 +193,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+ 
+                 check!(
+                     balance.bank_pk.eq(bank_ai.key),
+-                    MarginfiError::InvalidBankAccount
++                    AstrolendError::InvalidBankAccount
+                 );
+ 
+                 let price_adapter = {
+@@ -229,7 +229,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+     fn calc_weighted_assets_and_liabilities_values<'a>(
+         &'a self,
+         requirement_type: RequirementType,
+-    ) -> MarginfiResult<(I80F48, I80F48)>
++    ) -> AstrolendResult<(I80F48, I80F48)>
+     where
+         'info: 'a,
+     {
+@@ -259,7 +259,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+         &'a self,
+         requirement_type: RequirementType,
+         bank: &'a Bank,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         match bank.config.risk_tier {
+             RiskTier::Collateral => {
+                 let price_feed = self.try_get_price_feed();
+@@ -309,7 +309,7 @@ impl<'info> BankAccountWithPriceFeed<'_, 'info> {
+         &self,
+         requirement_type: RequirementType,
+         bank: &Bank,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let price_feed = self.try_get_price_feed()?;
+         let liability_weight = bank
+             .config
+@@ -352,7 +352,7 @@ enum PriceFeedError {
+ impl From<PriceFeedError> for Error {
+     fn from(value: PriceFeedError) -> Self {
+         match value {
+-            PriceFeedError::StaleOracle => error!(MarginfiError::StaleOracle),
++            PriceFeedError::StaleOracle => error!(AstrolendError::StaleOracle),
+         }
+     }
+ }
+@@ -364,7 +364,7 @@ pub fn calc_value(
+     price: I80F48,
+     mint_decimals: u8,
+     weight: Option<I80F48>,
+-) -> MarginfiResult<I80F48> {
++) -> AstrolendResult<I80F48> {
+     if amount == I80F48::ZERO {
+         return Ok(I80F48::ZERO);
+     }
+@@ -377,11 +377,11 @@ pub fn calc_value(
+         amount
+     };
+ 
+-    #[cfg(target_os = "solana")]
+-    debug!(
+-        "weighted_asset_qt: {}, price: {}, expo: {}",
+-        weighted_asset_amount, price, mint_decimals
+-    );
++    // #[cfg(target_os = "solana")]
++    // debug!(
++    //     "weighted_asset_qt: {}, price: {}, expo: {}",
++    //     weighted_asset_amount, price, mint_decimals
++    // );
+ 
+     let value = weighted_asset_amount
+         .checked_mul(price)
+@@ -393,7 +393,7 @@ pub fn calc_value(
+ }
+ 
+ #[inline]
+-pub fn calc_amount(value: I80F48, price: I80F48, mint_decimals: u8) -> MarginfiResult<I80F48> {
++pub fn calc_amount(value: I80F48, price: I80F48, mint_decimals: u8) -> AstrolendResult<I80F48> {
+     let scaling_factor = EXP_10_I80F48[mint_decimals as usize];
+ 
+     let qt = value
+@@ -422,34 +422,34 @@ impl RiskRequirementType {
+ }
+ 
+ pub struct RiskEngine<'a, 'info> {
+-    marginfi_account: &'a MarginfiAccount,
++    astrolend_account: &'a AstrolendAccount,
+     bank_accounts_with_price: Vec<BankAccountWithPriceFeed<'a, 'info>>,
+ }
+ 
+ impl<'info> RiskEngine<'_, 'info> {
+     pub fn new<'a>(
+-        marginfi_account: &'a MarginfiAccount,
++        astrolend_account: &'a AstrolendAccount,
+         remaining_ais: &'info [AccountInfo<'info>],
+-    ) -> MarginfiResult<RiskEngine<'a, 'info>> {
++    ) -> AstrolendResult<RiskEngine<'a, 'info>> {
+         check!(
+-            !marginfi_account.get_flag(IN_FLASHLOAN_FLAG),
+-            MarginfiError::AccountInFlashloan
++            !astrolend_account.get_flag(IN_FLASHLOAN_FLAG),
++            AstrolendError::AccountInFlashloan
+         );
+ 
+-        Self::new_no_flashloan_check(marginfi_account, remaining_ais)
++        Self::new_no_flashloan_check(astrolend_account, remaining_ais)
+     }
+ 
+     /// Internal constructor used either after manually checking account is not in a flashloan,
+     /// or explicity checking health for flashloan enabled actions.
+     fn new_no_flashloan_check<'a>(
+-        marginfi_account: &'a MarginfiAccount,
++        astrolend_account: &'a AstrolendAccount,
+         remaining_ais: &'info [AccountInfo<'info>],
+-    ) -> MarginfiResult<RiskEngine<'a, 'info>> {
++    ) -> AstrolendResult<RiskEngine<'a, 'info>> {
+         let bank_accounts_with_price =
+-            BankAccountWithPriceFeed::load(&marginfi_account.lending_account, remaining_ais)?;
++            BankAccountWithPriceFeed::load(&astrolend_account.lending_account, remaining_ais)?;
+ 
+         Ok(RiskEngine {
+-            marginfi_account,
++            astrolend_account,
+             bank_accounts_with_price,
+         })
+     }
+@@ -460,14 +460,14 @@ impl<'info> RiskEngine<'_, 'info> {
+     /// - Health check is skipped.
+     /// - `remaining_ais` can be an empty vec.
+     pub fn check_account_init_health<'a>(
+-        marginfi_account: &'a MarginfiAccount,
++        astrolend_account: &'a AstrolendAccount,
+         remaining_ais: &'info [AccountInfo<'info>],
+-    ) -> MarginfiResult<()> {
+-        if marginfi_account.get_flag(IN_FLASHLOAN_FLAG) {
++    ) -> AstrolendResult<()> {
++        if astrolend_account.get_flag(IN_FLASHLOAN_FLAG) {
+             return Ok(());
+         }
+ 
+-        Self::new_no_flashloan_check(marginfi_account, remaining_ais)?
++        Self::new_no_flashloan_check(astrolend_account, remaining_ais)?
+             .check_account_health(RiskRequirementType::Initial)?;
+ 
+         Ok(())
+@@ -477,7 +477,7 @@ impl<'info> RiskEngine<'_, 'info> {
+     pub fn get_account_health_components(
+         &self,
+         requirement_type: RiskRequirementType,
+-    ) -> MarginfiResult<(I80F48, I80F48)> {
++    ) -> AstrolendResult<(I80F48, I80F48)> {
+         let mut total_assets = I80F48::ZERO;
+         let mut total_liabilities = I80F48::ZERO;
+ 
+@@ -502,7 +502,7 @@ impl<'info> RiskEngine<'_, 'info> {
+     pub fn get_account_health(
+         &'info self,
+         requirement_type: RiskRequirementType,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let (total_weighted_assets, total_weighted_liabilities) =
+             self.get_account_health_components(requirement_type)?;
+ 
+@@ -511,7 +511,7 @@ impl<'info> RiskEngine<'_, 'info> {
+             .ok_or_else(math_error!())?)
+     }
+ 
+-    fn check_account_health(&self, requirement_type: RiskRequirementType) -> MarginfiResult {
++    fn check_account_health(&self, requirement_type: RiskRequirementType) -> AstrolendResult {
+         let (total_weighted_assets, total_weighted_liabilities) =
+             self.get_account_health_components(requirement_type)?;
+ 
+@@ -522,7 +522,7 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             total_weighted_assets >= total_weighted_liabilities,
+-            MarginfiError::RiskEngineInitRejected
++            AstrolendError::RiskEngineInitRejected
+         );
+ 
+         self.check_account_risk_tiers()?;
+@@ -536,28 +536,28 @@ impl<'info> RiskEngine<'_, 'info> {
+     pub fn check_pre_liquidation_condition_and_get_account_health(
+         &self,
+         bank_pk: &Pubkey,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         check!(
+-            !self.marginfi_account.get_flag(IN_FLASHLOAN_FLAG),
+-            MarginfiError::AccountInFlashloan
++            !self.astrolend_account.get_flag(IN_FLASHLOAN_FLAG),
++            AstrolendError::AccountInFlashloan
+         );
+ 
+         let liability_bank_balance = self
+             .bank_accounts_with_price
+             .iter()
+             .find(|a| a.balance.bank_pk == *bank_pk)
+-            .ok_or(MarginfiError::LendingAccountBalanceNotFound)?;
++            .ok_or(AstrolendError::LendingAccountBalanceNotFound)?;
+ 
+         check!(
+             liability_bank_balance
+                 .is_empty(BalanceSide::Liabilities)
+                 .not(),
+-            MarginfiError::IllegalLiquidation
++            AstrolendError::IllegalLiquidation
+         );
+ 
+         check!(
+             liability_bank_balance.is_empty(BalanceSide::Assets),
+-            MarginfiError::IllegalLiquidation
++            AstrolendError::IllegalLiquidation
+         );
+ 
+         let (assets, liabs) =
+@@ -572,7 +572,7 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             account_health <= I80F48::ZERO,
+-            MarginfiError::IllegalLiquidation,
++            AstrolendError::IllegalLiquidation,
+             "Account not unhealthy"
+         );
+ 
+@@ -593,10 +593,10 @@ impl<'info> RiskEngine<'_, 'info> {
+         &self,
+         bank_pk: &Pubkey,
+         pre_liquidation_health: I80F48,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         check!(
+-            !self.marginfi_account.get_flag(IN_FLASHLOAN_FLAG),
+-            MarginfiError::AccountInFlashloan
++            !self.astrolend_account.get_flag(IN_FLASHLOAN_FLAG),
++            AstrolendError::AccountInFlashloan
+         );
+ 
+         let liability_bank_balance = self
+@@ -609,13 +609,13 @@ impl<'info> RiskEngine<'_, 'info> {
+             liability_bank_balance
+                 .is_empty(BalanceSide::Liabilities)
+                 .not(),
+-            MarginfiError::IllegalLiquidation,
++            AstrolendError::IllegalLiquidation,
+             "Liability payoff too severe, exhausted liability"
+         );
+ 
+         check!(
+             liability_bank_balance.is_empty(BalanceSide::Assets),
+-            MarginfiError::IllegalLiquidation,
++            AstrolendError::IllegalLiquidation,
+             "Liability payoff too severe, liability balance has assets"
+         );
+ 
+@@ -626,7 +626,7 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             account_health <= I80F48::ZERO,
+-            MarginfiError::IllegalLiquidation,
++            AstrolendError::IllegalLiquidation,
+             "Liquidation too severe, account above maintenance requirement"
+         );
+ 
+@@ -637,7 +637,7 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             account_health > pre_liquidation_health,
+-            MarginfiError::IllegalLiquidation,
++            AstrolendError::IllegalLiquidation,
+             "Post liquidation health worse"
+         );
+ 
+@@ -646,13 +646,13 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+     /// Check that the account is in a bankrupt state.
+     /// Account needs to be insolvent and total value of assets need to be below the bankruptcy threshold.
+-    pub fn check_account_bankrupt(&self) -> MarginfiResult {
++    pub fn check_account_bankrupt(&self) -> AstrolendResult {
+         let (total_assets, total_liabilities) =
+             self.get_account_health_components(RiskRequirementType::Equity)?;
+ 
+         check!(
+-            !self.marginfi_account.get_flag(IN_FLASHLOAN_FLAG),
+-            MarginfiError::AccountInFlashloan
++            !self.astrolend_account.get_flag(IN_FLASHLOAN_FLAG),
++            AstrolendError::AccountInFlashloan
+         );
+ 
+         msg!(
+@@ -663,17 +663,17 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             total_assets < total_liabilities,
+-            MarginfiError::AccountNotBankrupt
++            AstrolendError::AccountNotBankrupt
+         );
+         check!(
+             total_assets < BANKRUPT_THRESHOLD && total_liabilities > ZERO_AMOUNT_THRESHOLD,
+-            MarginfiError::AccountNotBankrupt
++            AstrolendError::AccountNotBankrupt
+         );
+ 
+         Ok(())
+     }
+ 
+-    fn check_account_risk_tiers<'a>(&'a self) -> MarginfiResult
++    fn check_account_risk_tiers<'a>(&'a self) -> AstrolendResult
+     where
+         'info: 'a,
+     {
+@@ -698,7 +698,7 @@ impl<'info> RiskEngine<'_, 'info> {
+ 
+         check!(
+             !is_in_isolated_risk_tier || n_balances_with_liablities == 1,
+-            MarginfiError::IsolatedAccountIllegalState
++            AstrolendError::IsolatedAccountIllegalState
+         );
+ 
+         Ok(())
+@@ -772,7 +772,7 @@ impl Balance {
+         shares < EMPTY_BALANCE_THRESHOLD
+     }
+ 
+-    pub fn change_asset_shares(&mut self, delta: I80F48) -> MarginfiResult {
++    pub fn change_asset_shares(&mut self, delta: I80F48) -> AstrolendResult {
+         let asset_shares: I80F48 = self.asset_shares.into();
+         self.asset_shares = asset_shares
+             .checked_add(delta)
+@@ -781,7 +781,7 @@ impl Balance {
+         Ok(())
+     }
+ 
+-    pub fn change_liability_shares(&mut self, delta: I80F48) -> MarginfiResult {
++    pub fn change_liability_shares(&mut self, delta: I80F48) -> AstrolendResult {
+         let liability_shares: I80F48 = self.liability_shares.into();
+         self.liability_shares = liability_shares
+             .checked_add(delta)
+@@ -790,10 +790,10 @@ impl Balance {
+         Ok(())
+     }
+ 
+-    pub fn close(&mut self) -> MarginfiResult {
++    pub fn close(&mut self) -> AstrolendResult {
+         check!(
+             I80F48::from(self.emissions_outstanding) < I80F48::ONE,
+-            MarginfiError::CannotCloseOutstandingEmissions
++            AstrolendError::CannotCloseOutstandingEmissions
+         );
+ 
+         *self = Self::empty_deactivated();
+@@ -843,12 +843,12 @@ impl<'a> BankAccountWrapper<'a> {
+         bank_pk: &Pubkey,
+         bank: &'a mut Bank,
+         lending_account: &'a mut LendingAccount,
+-    ) -> MarginfiResult<BankAccountWrapper<'a>> {
++    ) -> AstrolendResult<BankAccountWrapper<'a>> {
+         let balance = lending_account
+             .balances
+             .iter_mut()
+             .find(|balance| balance.active && balance.bank_pk.eq(bank_pk))
+-            .ok_or_else(|| error!(MarginfiError::BankAccountNotFound))?;
++            .ok_or_else(|| error!(AstrolendError::BankAccountNotFound))?;
+ 
+         Ok(Self { balance, bank })
+     }
+@@ -859,7 +859,7 @@ impl<'a> BankAccountWrapper<'a> {
+         bank_pk: &Pubkey,
+         bank: &'a mut Bank,
+         lending_account: &'a mut LendingAccount,
+-    ) -> MarginfiResult<BankAccountWrapper<'a>> {
++    ) -> AstrolendResult<BankAccountWrapper<'a>> {
+         let balance_index = lending_account
+             .balances
+             .iter()
+@@ -870,14 +870,14 @@ impl<'a> BankAccountWrapper<'a> {
+                 let balance = lending_account
+                     .balances
+                     .get_mut(balance_index)
+-                    .ok_or_else(|| error!(MarginfiError::BankAccountNotFound))?;
++                    .ok_or_else(|| error!(AstrolendError::BankAccountNotFound))?;
+ 
+                 Ok(Self { balance, bank })
+             }
+             None => {
+                 let empty_index = lending_account
+                     .get_first_empty_balance()
+-                    .ok_or_else(|| error!(MarginfiError::LendingAccountBalanceSlotsFull))?;
++                    .ok_or_else(|| error!(AstrolendError::LendingAccountBalanceSlotsFull))?;
+ 
+                 lending_account.balances[empty_index] = Balance {
+                     active: true,
+@@ -901,22 +901,22 @@ impl<'a> BankAccountWrapper<'a> {
+     // ------------ Borrow / Lend primitives
+ 
+     /// Deposit an asset, will repay any outstanding liabilities.
+-    pub fn deposit(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn deposit(&mut self, amount: I80F48) -> AstrolendResult {
+         self.increase_balance_internal(amount, BalanceIncreaseType::Any)
+     }
+ 
+     /// Repay a liability, will error if there is not enough liability - depositing is not allowed.
+-    pub fn repay(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn repay(&mut self, amount: I80F48) -> AstrolendResult {
+         self.increase_balance_internal(amount, BalanceIncreaseType::RepayOnly)
+     }
+ 
+     /// Withdraw an asset, will error if there is not enough asset - borrowing is not allowed.
+-    pub fn withdraw(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn withdraw(&mut self, amount: I80F48) -> AstrolendResult {
+         self.decrease_balance_internal(amount, BalanceDecreaseType::WithdrawOnly)
+     }
+ 
+     /// Incur a borrow, will withdraw any existing assets.
+-    pub fn borrow(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn borrow(&mut self, amount: I80F48) -> AstrolendResult {
+         self.decrease_balance_internal(amount, BalanceDecreaseType::Any)
+     }
+ 
+@@ -924,17 +924,17 @@ impl<'a> BankAccountWrapper<'a> {
+ 
+     /// Repay liability and deposit/increase asset depending on
+     /// the specified deposit amount and the existing balance.
+-    pub fn increase_balance(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn increase_balance(&mut self, amount: I80F48) -> AstrolendResult {
+         self.increase_balance_internal(amount, BalanceIncreaseType::Any)
+     }
+ 
+-    pub fn increase_balance_in_liquidation(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn increase_balance_in_liquidation(&mut self, amount: I80F48) -> AstrolendResult {
+         self.increase_balance_internal(amount, BalanceIncreaseType::BypassDepositLimit)
+     }
+ 
+     /// Withdraw asset and create/increase liability depending on
+     /// the specified deposit amount and the existing balance.
+-    pub fn decrease_balance(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn decrease_balance(&mut self, amount: I80F48) -> AstrolendResult {
+         self.decrease_balance_internal(amount, BalanceDecreaseType::Any)
+     }
+ 
+@@ -943,12 +943,12 @@ impl<'a> BankAccountWrapper<'a> {
+     ///
+     /// This function will also bypass borrow limits
+     /// so liquidations can happen in banks with maxed out borrows.
+-    pub fn decrease_balance_in_liquidation(&mut self, amount: I80F48) -> MarginfiResult {
++    pub fn decrease_balance_in_liquidation(&mut self, amount: I80F48) -> AstrolendResult {
+         self.decrease_balance_internal(amount, BalanceDecreaseType::BypassBorrowLimit)
+     }
+ 
+     /// Withdraw existing asset in full - will error if there is no asset.
+-    pub fn withdraw_all(&mut self) -> MarginfiResult<u64> {
++    pub fn withdraw_all(&mut self) -> AstrolendResult<u64> {
+         self.claim_emissions(Clock::get()?.unix_timestamp as u64)?;
+ 
+         let balance = &mut self.balance;
+@@ -965,12 +965,12 @@ impl<'a> BankAccountWrapper<'a> {
+ 
+         check!(
+             current_asset_amount.is_positive_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::NoAssetFound
++            AstrolendError::NoAssetFound
+         );
+ 
+         check!(
+             current_liability_amount.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::NoAssetFound
++            AstrolendError::NoAssetFound
+         );
+ 
+         balance.close()?;
+@@ -997,7 +997,7 @@ impl<'a> BankAccountWrapper<'a> {
+     }
+ 
+     /// Repay existing liability in full - will error if there is no liability.
+-    pub fn repay_all(&mut self) -> MarginfiResult<u64> {
++    pub fn repay_all(&mut self) -> AstrolendResult<u64> {
+         self.claim_emissions(Clock::get()?.unix_timestamp as u64)?;
+ 
+         let balance = &mut self.balance;
+@@ -1013,12 +1013,12 @@ impl<'a> BankAccountWrapper<'a> {
+ 
+         check!(
+             current_liability_amount.is_positive_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::NoLiabilityFound
++            AstrolendError::NoLiabilityFound
+         );
+ 
+         check!(
+             current_asset_amount.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::NoLiabilityFound
++            AstrolendError::NoLiabilityFound
+         );
+ 
+         balance.close()?;
+@@ -1042,7 +1042,7 @@ impl<'a> BankAccountWrapper<'a> {
+             .ok_or_else(math_error!())?)
+     }
+ 
+-    pub fn close_balance(&mut self) -> MarginfiResult<()> {
++    pub fn close_balance(&mut self) -> AstrolendResult<()> {
+         self.claim_emissions(Clock::get()?.unix_timestamp as u64)?;
+ 
+         let balance = &mut self.balance;
+@@ -1054,13 +1054,13 @@ impl<'a> BankAccountWrapper<'a> {
+ 
+         check!(
+             current_liability_amount.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::IllegalBalanceState,
++            AstrolendError::IllegalBalanceState,
+             "Balance has existing debt"
+         );
+ 
+         check!(
+             current_asset_amount.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-            MarginfiError::IllegalBalanceState,
++            AstrolendError::IllegalBalanceState,
+             "Balance has existing assets"
+         );
+ 
+@@ -1075,7 +1075,7 @@ impl<'a> BankAccountWrapper<'a> {
+         &mut self,
+         balance_delta: I80F48,
+         operation_type: BalanceIncreaseType,
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         debug!(
+             "Balance increase: {} (type: {:?})",
+             balance_delta, operation_type
+@@ -1103,13 +1103,13 @@ impl<'a> BankAccountWrapper<'a> {
+             BalanceIncreaseType::RepayOnly => {
+                 check!(
+                     asset_amount_increase.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-                    MarginfiError::OperationRepayOnly
++                    AstrolendError::OperationRepayOnly
+                 );
+             }
+             BalanceIncreaseType::DepositOnly => {
+                 check!(
+                     liability_amount_decrease.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-                    MarginfiError::OperationDepositOnly
++                    AstrolendError::OperationDepositOnly
+                 );
+             }
+             BalanceIncreaseType::Any | BalanceIncreaseType::BypassDepositLimit => {}
+@@ -1140,7 +1140,7 @@ impl<'a> BankAccountWrapper<'a> {
+         &mut self,
+         balance_delta: I80F48,
+         operation_type: BalanceDecreaseType,
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         debug!(
+             "Balance decrease: {} of (type: {:?})",
+             balance_delta, operation_type
+@@ -1168,13 +1168,13 @@ impl<'a> BankAccountWrapper<'a> {
+             BalanceDecreaseType::WithdrawOnly => {
+                 check!(
+                     liability_amount_increase.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-                    MarginfiError::OperationWithdrawOnly
++                    AstrolendError::OperationWithdrawOnly
+                 );
+             }
+             BalanceDecreaseType::BorrowOnly => {
+                 check!(
+                     asset_amount_decrease.is_zero_with_tolerance(ZERO_AMOUNT_THRESHOLD),
+-                    MarginfiError::OperationBorrowOnly
++                    AstrolendError::OperationBorrowOnly
+                 );
+             }
+             _ => {}
+@@ -1203,7 +1203,7 @@ impl<'a> BankAccountWrapper<'a> {
+     }
+ 
+     /// Claim any unclaimed emissions and add them to the outstanding emissions amount.
+-    pub fn claim_emissions(&mut self, current_timestamp: u64) -> MarginfiResult {
++    pub fn claim_emissions(&mut self, current_timestamp: u64) -> AstrolendResult {
+         if let Some(balance_amount) = match (
+             self.balance.get_side(),
+             self.bank.get_flag(EMISSIONS_FLAG_LENDING_ACTIVE),
+@@ -1273,7 +1273,7 @@ impl<'a> BankAccountWrapper<'a> {
+     }
+ 
+     /// Claim any outstanding emissions, and return the max amount that can be withdrawn.
+-    pub fn settle_emissions_and_get_transfer_amount(&mut self) -> MarginfiResult<u64> {
++    pub fn settle_emissions_and_get_transfer_amount(&mut self) -> AstrolendResult<u64> {
+         self.claim_emissions(Clock::get()?.unix_timestamp as u64)?;
+ 
+         let outstanding_emissions_floored = I80F48::from(self.balance.emissions_outstanding)
+@@ -1301,7 +1301,7 @@ impl<'a> BankAccountWrapper<'a> {
+         maybe_mint: Option<&InterfaceAccount<'info, Mint>>,
+         program: AccountInfo<'info>,
+         remaining_accounts: &[AccountInfo<'info>],
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         self.bank.deposit_spl_transfer(
+             amount,
+             from,
+@@ -1323,7 +1323,7 @@ impl<'a> BankAccountWrapper<'a> {
+         program: AccountInfo<'info>,
+         signer_seeds: &[&[&[u8]]],
+         remaining_accounts: &[AccountInfo<'info>],
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         self.bank.withdraw_spl_transfer(
+             amount,
+             from,
+@@ -1358,7 +1358,7 @@ fn calc_emissions(
+     balance_amount: I80F48,
+     mint_decimals: usize,
+     emissions_rate: I80F48,
+-) -> MarginfiResult<I80F48> {
++) -> AstrolendResult<I80F48> {
+     let exponent = EXP_10_I80F48[mint_decimals];
+     let balance_amount_ui = balance_amount
+         .checked_div(exponent)
+@@ -1405,7 +1405,7 @@ mod test {
+         let bank_pk: [u8; 32] = [2; 32];
+         let new_authority: [u8; 32] = [3; 32];
+ 
+-        let mut acc = MarginfiAccount {
++        let mut acc = AstrolendAccount {
+             group: group.into(),
+             authority: authority.into(),
+             lending_account: LendingAccount {
+diff --git a/results/src/state/marginfi_group.rs b/results/src/state/astrolend_group.rs
+similarity index 91%
+rename from results/src/state/marginfi_group.rs
+rename to results/src/state/astrolend_group.rs
+index dfdde52..02cac3c 100755
+--- a/results/src/state/marginfi_group.rs
++++ b/results/src/state/astrolend_group.rs
+@@ -1,5 +1,5 @@
+ use super::{
+-    marginfi_account::{BalanceSide, RequirementType},
++    astrolend_account::{BalanceSide, RequirementType},
+     price::{OraclePriceFeedAdapter, OracleSetup},
+ };
+ use crate::borsh::{BorshDeserialize, BorshSerialize};
+@@ -15,10 +15,10 @@ use crate::{
+         TOTAL_ASSET_VALUE_INIT_LIMIT_INACTIVE,
+     },
+     debug, math_error,
+-    prelude::MarginfiError,
++    prelude::AstrolendError,
+     set_if_some,
+-    state::marginfi_account::calc_value,
+-    MarginfiResult,
++    state::astrolend_account::calc_value,
++    AstrolendResult,
+ };
+ use anchor_lang::prelude::borsh;
+ use anchor_lang::prelude::*;
+@@ -42,17 +42,17 @@ use type_layout::TypeLayout;
+     derive(Debug, PartialEq, Eq, TypeLayout)
+ )]
+ #[derive(Default)]
+-pub struct MarginfiGroup {
++pub struct AstrolendGroup {
+     pub admin: Pubkey,
+     pub _padding_0: [[u64; 2]; 32],
+     pub _padding_1: [[u64; 2]; 32],
+ }
+ 
+-impl MarginfiGroup {
++impl AstrolendGroup {
+     /// Configure the group parameters.
+     /// This function validates config values so the group remains in a valid state.
+     /// Any modification of group config should happen through this function.
+-    pub fn configure(&mut self, config: &GroupConfig) -> MarginfiResult {
++    pub fn configure(&mut self, config: &GroupConfig) -> AstrolendResult {
+         set_if_some!(self.admin, config.admin);
+ 
+         Ok(())
+@@ -60,7 +60,7 @@ impl MarginfiGroup {
+ 
+     /// Set the group parameters when initializing a group.
+     /// This should be called only when the group is first initialized.
+-    /// Both margin requirements are initially set to 100% and should be configured before use.
++    /// Both astrol requirements are initially set to 100% and should be configured before use.
+     #[allow(clippy::too_many_arguments)]
+     pub fn set_initial_configuration(&mut self, admin_pk: Pubkey) {
+         self.admin = admin_pk;
+@@ -74,10 +74,10 @@ pub struct GroupConfig {
+ }
+ 
+ /// Load and validate a pyth price feed account.
+-pub fn load_pyth_price_feed(ai: &AccountInfo) -> MarginfiResult<PriceFeed> {
+-    check!(ai.owner.eq(&PYTH_ID), MarginfiError::InvalidOracleAccount);
++pub fn load_pyth_price_feed(ai: &AccountInfo) -> AstrolendResult<PriceFeed> {
++    check!(ai.owner.eq(&PYTH_ID), AstrolendError::InvalidOracleAccount);
+     let price_feed = SolanaPriceAccount::account_info_to_feed(ai)
+-        .map_err(|_| MarginfiError::InvalidOracleAccount)?;
++        .map_err(|_| AstrolendError::InvalidOracleAccount)?;
+     Ok(price_feed)
+ }
+ 
+@@ -228,18 +228,18 @@ impl InterestRateConfig {
+         }
+     }
+ 
+-    pub fn validate(&self) -> MarginfiResult {
++    pub fn validate(&self) -> AstrolendResult {
+         let optimal_ur: I80F48 = self.optimal_utilization_rate.into();
+         let plateau_ir: I80F48 = self.plateau_interest_rate.into();
+         let max_ir: I80F48 = self.max_interest_rate.into();
+ 
+         check!(
+             optimal_ur > I80F48::ZERO && optimal_ur < I80F48::ONE,
+-            MarginfiError::InvalidConfig
++            AstrolendError::InvalidConfig
+         );
+-        check!(plateau_ir > I80F48::ZERO, MarginfiError::InvalidConfig);
+-        check!(max_ir > I80F48::ZERO, MarginfiError::InvalidConfig);
+-        check!(plateau_ir < max_ir, MarginfiError::InvalidConfig);
++        check!(plateau_ir > I80F48::ZERO, AstrolendError::InvalidConfig);
++        check!(max_ir > I80F48::ZERO, AstrolendError::InvalidConfig);
++        check!(plateau_ir < max_ir, AstrolendError::InvalidConfig);
+ 
+         Ok(())
+     }
+@@ -349,7 +349,7 @@ pub struct Bank {
+ impl Bank {
+     #[allow(clippy::too_many_arguments)]
+     pub fn new(
+-        marginfi_group_pk: Pubkey,
++        astrolend_group_pk: Pubkey,
+         config: BankConfig,
+         mint: Pubkey,
+         mint_decimals: u8,
+@@ -367,7 +367,7 @@ impl Bank {
+         Bank {
+             mint,
+             mint_decimals,
+-            group: marginfi_group_pk,
++            group: astrolend_group_pk,
+             asset_share_value: I80F48::ONE.into(),
+             liability_share_value: I80F48::ONE.into(),
+             liquidity_vault,
+@@ -393,25 +393,25 @@ impl Bank {
+         }
+     }
+ 
+-    pub fn get_liability_amount(&self, shares: I80F48) -> MarginfiResult<I80F48> {
++    pub fn get_liability_amount(&self, shares: I80F48) -> AstrolendResult<I80F48> {
+         Ok(shares
+             .checked_mul(self.liability_share_value.into())
+             .ok_or_else(math_error!())?)
+     }
+ 
+-    pub fn get_asset_amount(&self, shares: I80F48) -> MarginfiResult<I80F48> {
++    pub fn get_asset_amount(&self, shares: I80F48) -> AstrolendResult<I80F48> {
+         Ok(shares
+             .checked_mul(self.asset_share_value.into())
+             .ok_or_else(math_error!())?)
+     }
+ 
+-    pub fn get_liability_shares(&self, value: I80F48) -> MarginfiResult<I80F48> {
++    pub fn get_liability_shares(&self, value: I80F48) -> AstrolendResult<I80F48> {
+         Ok(value
+             .checked_div(self.liability_share_value.into())
+             .ok_or_else(math_error!())?)
+     }
+ 
+-    pub fn get_asset_shares(&self, value: I80F48) -> MarginfiResult<I80F48> {
++    pub fn get_asset_shares(&self, value: I80F48) -> AstrolendResult<I80F48> {
+         Ok(value
+             .checked_div(self.asset_share_value.into())
+             .ok_or_else(math_error!())?)
+@@ -421,7 +421,7 @@ impl Bank {
+         &mut self,
+         shares: I80F48,
+         bypass_deposit_limit: bool,
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         let total_asset_shares: I80F48 = self.total_asset_shares.into();
+         self.total_asset_shares = total_asset_shares
+             .checked_add(shares)
+@@ -434,7 +434,7 @@ impl Bank {
+ 
+             check!(
+                 total_deposits_amount < deposit_limit,
+-                crate::prelude::MarginfiError::BankAssetCapacityExceeded
++                crate::prelude::AstrolendError::BankAssetCapacityExceeded
+             )
+         }
+ 
+@@ -444,7 +444,7 @@ impl Bank {
+     pub fn maybe_get_asset_weight_init_discount(
+         &self,
+         price: I80F48,
+-    ) -> MarginfiResult<Option<I80F48>> {
++    ) -> AstrolendResult<Option<I80F48>> {
+         if self.config.usd_init_limit_active() {
+             let bank_total_assets_value = calc_value(
+                 self.get_asset_amount(self.total_asset_shares.into())?,
+@@ -456,22 +456,22 @@ impl Bank {
+             let total_asset_value_init_limit =
+                 I80F48::from_num(self.config.total_asset_value_init_limit);
+ 
+-            #[cfg(target_os = "solana")]
+-            debug!(
+-                "Init limit active, limit: {}, total_assets: {}",
+-                total_asset_value_init_limit, bank_total_assets_value
+-            );
++            // #[cfg(target_os = "solana")]
++            // debug!(
++            //     "Init limit active, limit: {}, total_assets: {}",
++            //     total_asset_value_init_limit, bank_total_assets_value
++            // );
+ 
+             if bank_total_assets_value > total_asset_value_init_limit {
+                 let discount = total_asset_value_init_limit
+                     .checked_div(bank_total_assets_value)
+                     .ok_or_else(math_error!())?;
+ 
+-                #[cfg(target_os = "solana")]
+-                debug!(
+-                    "Discounting assets by {:.2} because of total deposits {} over {} usd cap",
+-                    discount, bank_total_assets_value, total_asset_value_init_limit
+-                );
++                // #[cfg(target_os = "solana")]
++                // debug!(
++                //     "Discounting assets by {:.2} because of total deposits {} over {} usd cap",
++                //     discount, bank_total_assets_value, total_asset_value_init_limit
++                // );
+ 
+                 Ok(Some(discount))
+             } else {
+@@ -486,7 +486,7 @@ impl Bank {
+         &mut self,
+         shares: I80F48,
+         bypass_borrow_limit: bool,
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         let total_liability_shares: I80F48 = self.total_liability_shares.into();
+         self.total_liability_shares = total_liability_shares
+             .checked_add(shares)
+@@ -501,26 +501,26 @@ impl Bank {
+ 
+             check!(
+                 total_liability_amount < borrow_limit,
+-                crate::prelude::MarginfiError::BankLiabilityCapacityExceeded
++                crate::prelude::AstrolendError::BankLiabilityCapacityExceeded
+             )
+         }
+ 
+         Ok(())
+     }
+ 
+-    pub fn check_utilization_ratio(&self) -> MarginfiResult {
++    pub fn check_utilization_ratio(&self) -> AstrolendResult {
+         let total_assets = self.get_asset_amount(self.total_asset_shares.into())?;
+         let total_liabilities = self.get_liability_amount(self.total_liability_shares.into())?;
+ 
+         check!(
+             total_assets >= total_liabilities,
+-            crate::prelude::MarginfiError::IllegalUtilizationRatio
++            crate::prelude::AstrolendError::IllegalUtilizationRatio
+         );
+ 
+         Ok(())
+     }
+ 
+-    pub fn configure(&mut self, config: &BankConfigOpt) -> MarginfiResult {
++    pub fn configure(&mut self, config: &BankConfigOpt) -> AstrolendResult {
+         set_if_some!(self.config.asset_weight_init, config.asset_weight_init);
+         set_if_some!(self.config.asset_weight_maint, config.asset_weight_maint);
+         set_if_some!(
+@@ -571,7 +571,7 @@ impl Bank {
+         &mut self,
+         current_timestamp: i64,
+         #[cfg(not(feature = "client"))] bank: Pubkey,
+-    ) -> MarginfiResult<()> {
++    ) -> AstrolendResult<()> {
+         #[cfg(all(not(feature = "client"), feature = "debug"))]
+         solana_program::log::sol_log_compute_units();
+ 
+@@ -590,7 +590,7 @@ impl Bank {
+             #[cfg(not(feature = "client"))]
+             emit!(LendingPoolBankAccrueInterestEvent {
+                 header: GroupEventHeader {
+-                    marginfi_group: self.group,
++                    astrolend_group: self.group,
+                     signer: None
+                 },
+                 bank,
+@@ -641,7 +641,7 @@ impl Bank {
+ 
+             emit!(LendingPoolBankAccrueInterestEvent {
+                 header: GroupEventHeader {
+-                    marginfi_group: self.group,
++                    astrolend_group: self.group,
+                     signer: None
+                 },
+                 bank,
+@@ -664,10 +664,10 @@ impl Bank {
+         maybe_mint: Option<&InterfaceAccount<'info, Mint>>,
+         program: AccountInfo<'info>,
+         remaining_accounts: &[AccountInfo<'info>],
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         check!(
+             to.key.eq(&self.liquidity_vault),
+-            MarginfiError::InvalidTransfer
++            AstrolendError::InvalidTransfer
+         );
+ 
+         debug!(
+@@ -716,7 +716,7 @@ impl Bank {
+         program: AccountInfo<'info>,
+         signer_seeds: &[&[&[u8]]],
+         remaining_accounts: &[AccountInfo<'info>],
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         debug!(
+             "withdraw_spl_transfer: amount: {} from {} to {}, auth {}",
+             amount, from.key, to.key, authority.key
+@@ -760,7 +760,7 @@ impl Bank {
+     /// Socialize a loss `loss_amount` among depositors,
+     /// the `total_deposit_shares` stays the same, but total value of deposits is
+     /// reduced by `loss_amount`;
+-    pub fn socialize_loss(&mut self, loss_amount: I80F48) -> MarginfiResult {
++    pub fn socialize_loss(&mut self, loss_amount: I80F48) -> AstrolendResult {
+         let total_asset_shares: I80F48 = self.total_asset_shares.into();
+         let old_asset_share_value: I80F48 = self.asset_share_value.into();
+ 
+@@ -782,7 +782,7 @@ impl Bank {
+         is_asset_or_liability_amount_increasing: Option<bool>,
+     ) -> Result<()> {
+         match self.config.operational_state {
+-            BankOperationalState::Paused => Err(MarginfiError::BankPaused.into()),
++            BankOperationalState::Paused => Err(AstrolendError::BankPaused.into()),
+             BankOperationalState::Operational => Ok(()),
+             BankOperationalState::ReduceOnly => {
+                 if let Some(is_asset_or_liability_amount_increasing) =
+@@ -790,7 +790,7 @@ impl Bank {
+                 {
+                     check!(
+                         !is_asset_or_liability_amount_increasing,
+-                        MarginfiError::BankReduceOnly
++                        AstrolendError::BankReduceOnly
+                     );
+                 }
+ 
+@@ -980,7 +980,7 @@ pub struct BankConfigCompact {
+ 
+     pub _pad0: [u8; 7],
+ 
+-    /// USD denominated limit for calculating asset value for initialization margin requirements.
++    /// USD denominated limit for calculating asset value for initialization astrol requirements.
+     /// Example, if total SOL deposits are equal to $1M and the limit it set to $500K,
+     /// then SOL assets will be discounted by 50%.
+     ///
+@@ -1079,7 +1079,7 @@ pub struct BankConfig {
+ 
+     pub _pad1: [u8; 7],
+ 
+-    /// USD denominated limit for calculating asset value for initialization margin requirements.
++    /// USD denominated limit for calculating asset value for initialization astrol requirements.
+     /// Example, if total SOL deposits are equal to $1M and the limit it set to $500K,
+     /// then SOL assets will be discounted by 50%.
+     ///
+@@ -1153,30 +1153,30 @@ impl BankConfig {
+         }
+     }
+ 
+-    pub fn validate(&self) -> MarginfiResult {
++    pub fn validate(&self) -> AstrolendResult {
+         let asset_init_w = I80F48::from(self.asset_weight_init);
+         let asset_maint_w = I80F48::from(self.asset_weight_maint);
+ 
+         check!(
+             asset_init_w >= I80F48::ZERO && asset_init_w <= I80F48::ONE,
+-            MarginfiError::InvalidConfig
++            AstrolendError::InvalidConfig
+         );
+-        check!(asset_maint_w >= asset_init_w, MarginfiError::InvalidConfig);
++        check!(asset_maint_w >= asset_init_w, AstrolendError::InvalidConfig);
+ 
+         let liab_init_w = I80F48::from(self.liability_weight_init);
+         let liab_maint_w = I80F48::from(self.liability_weight_maint);
+ 
+-        check!(liab_init_w >= I80F48::ONE, MarginfiError::InvalidConfig);
++        check!(liab_init_w >= I80F48::ONE, AstrolendError::InvalidConfig);
+         check!(
+             liab_maint_w <= liab_init_w && liab_maint_w >= I80F48::ONE,
+-            MarginfiError::InvalidConfig
++            AstrolendError::InvalidConfig
+         );
+ 
+         self.interest_rate_config.validate()?;
+ 
+         if self.risk_tier == RiskTier::Isolated {
+-            check!(asset_init_w == I80F48::ZERO, MarginfiError::InvalidConfig);
+-            check!(asset_maint_w == I80F48::ZERO, MarginfiError::InvalidConfig);
++            check!(asset_init_w == I80F48::ZERO, AstrolendError::InvalidConfig);
++            check!(asset_maint_w == I80F48::ZERO, AstrolendError::InvalidConfig);
+         }
+ 
+         Ok(())
+@@ -1192,7 +1192,7 @@ impl BankConfig {
+         self.borrow_limit != u64::MAX
+     }
+ 
+-    pub fn validate_oracle_setup(&self, ais: &[AccountInfo]) -> MarginfiResult {
++    pub fn validate_oracle_setup(&self, ais: &[AccountInfo]) -> AstrolendResult {
+         OraclePriceFeedAdapter::validate_bank_config(self, ais)?;
+         Ok(())
+     }
+diff --git a/results/src/state/mod.rs b/results/src/state/mod.rs
+index d20594f..a3ae088 100755
+--- a/results/src/state/mod.rs
++++ b/results/src/state/mod.rs
+@@ -1,3 +1,3 @@
+-pub mod marginfi_account;
+-pub mod marginfi_group;
++pub mod astrolend_account;
++pub mod astrolend_group;
+ pub mod price;
+diff --git a/results/src/state/price.rs b/results/src/state/price.rs
+index 732c383..400802d 100755
+--- a/results/src/state/price.rs
++++ b/results/src/state/price.rs
+@@ -22,7 +22,7 @@ use crate::{
+     prelude::*,
+ };
+ 
+-use super::marginfi_group::BankConfig;
++use super::astrolend_group::BankConfig;
+ use anchor_lang::prelude::borsh;
+ use pyth_solana_receiver_sdk::PYTH_PUSH_ORACLE_ID;
+ 
+@@ -58,7 +58,7 @@ pub trait PriceAdapter {
+         &self,
+         oracle_price_type: OraclePriceType,
+         bias: Option<PriceBias>,
+-    ) -> MarginfiResult<I80F48>;
++    ) -> AstrolendResult<I80F48>;
+ }
+ 
+ #[enum_dispatch(PriceAdapter)]
+@@ -75,7 +75,7 @@ impl OraclePriceFeedAdapter {
+         bank_config: &BankConfig,
+         ais: &[AccountInfo],
+         clock: &Clock,
+-    ) -> MarginfiResult<Self> {
++    ) -> AstrolendResult<Self> {
+         Self::try_from_bank_config_with_max_age(
+             bank_config,
+             ais,
+@@ -89,14 +89,14 @@ impl OraclePriceFeedAdapter {
+         ais: &[AccountInfo],
+         clock: &Clock,
+         max_age: u64,
+-    ) -> MarginfiResult<Self> {
++    ) -> AstrolendResult<Self> {
+         match bank_config.oracle_setup {
+-            OracleSetup::None => Err(MarginfiError::OracleNotSetup.into()),
++            OracleSetup::None => Err(AstrolendError::OracleNotSetup.into()),
+             OracleSetup::PythLegacy => {
+-                check!(ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 let account_info = &ais[0];
+@@ -106,10 +106,10 @@ impl OraclePriceFeedAdapter {
+                 ))
+             }
+             OracleSetup::SwitchboardV2 => {
+-                check!(ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 Ok(OraclePriceFeedAdapter::SwitchboardV2(
+@@ -117,13 +117,13 @@ impl OraclePriceFeedAdapter {
+                 ))
+             }
+             OracleSetup::PythPushOracle => {
+-                check!(ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(ais.len() == 1, AstrolendError::InvalidOracleAccount);
+ 
+                 let account_info = &ais[0];
+ 
+                 check!(
+                     account_info.owner == &pyth_solana_receiver_sdk::id(),
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 let price_feed_id = bank_config.get_pyth_push_oracle_feed_id().unwrap();
+@@ -138,10 +138,10 @@ impl OraclePriceFeedAdapter {
+                 ))
+             }
+             OracleSetup::SwitchboardPull => {
+-                check!(ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 Ok(OraclePriceFeedAdapter::SwitchboardPull(
+@@ -154,14 +154,14 @@ impl OraclePriceFeedAdapter {
+     pub fn validate_bank_config(
+         bank_config: &BankConfig,
+         oracle_ais: &[AccountInfo],
+-    ) -> MarginfiResult {
++    ) -> AstrolendResult {
+         match bank_config.oracle_setup {
+-            OracleSetup::None => Err(MarginfiError::OracleNotSetup.into()),
++            OracleSetup::None => Err(AstrolendError::OracleNotSetup.into()),
+             OracleSetup::PythLegacy => {
+-                check!(oracle_ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(oracle_ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     oracle_ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 PythLegacyPriceFeed::check_ais(&oracle_ais[0])?;
+@@ -169,10 +169,10 @@ impl OraclePriceFeedAdapter {
+                 Ok(())
+             }
+             OracleSetup::SwitchboardV2 => {
+-                check!(oracle_ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(oracle_ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     oracle_ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 SwitchboardV2PriceFeed::check_ais(&oracle_ais[0])?;
+@@ -180,7 +180,7 @@ impl OraclePriceFeedAdapter {
+                 Ok(())
+             }
+             OracleSetup::PythPushOracle => {
+-                check!(oracle_ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(oracle_ais.len() == 1, AstrolendError::InvalidOracleAccount);
+ 
+                 PythPushOraclePriceFeed::check_ai_and_feed_id(
+                     &oracle_ais[0],
+@@ -190,10 +190,10 @@ impl OraclePriceFeedAdapter {
+                 Ok(())
+             }
+             OracleSetup::SwitchboardPull => {
+-                check!(oracle_ais.len() == 1, MarginfiError::InvalidOracleAccount);
++                check!(oracle_ais.len() == 1, AstrolendError::InvalidOracleAccount);
+                 check!(
+                     oracle_ais[0].key == &bank_config.oracle_keys[0],
+-                    MarginfiError::InvalidOracleAccount
++                    AstrolendError::InvalidOracleAccount
+                 );
+ 
+                 SwitchboardPullPriceFeed::check_ais(&oracle_ais[0])?;
+@@ -211,16 +211,16 @@ pub struct PythLegacyPriceFeed {
+ }
+ 
+ impl PythLegacyPriceFeed {
+-    pub fn load_checked(ai: &AccountInfo, current_time: i64, max_age: u64) -> MarginfiResult<Self> {
++    pub fn load_checked(ai: &AccountInfo, current_time: i64, max_age: u64) -> AstrolendResult<Self> {
+         let price_feed = load_pyth_price_feed(ai)?;
+ 
+         let ema_price = price_feed
+             .get_ema_price_no_older_than(current_time, max_age)
+-            .ok_or(MarginfiError::StaleOracle)?;
++            .ok_or(AstrolendError::StaleOracle)?;
+ 
+         let price = price_feed
+             .get_price_no_older_than(current_time, max_age)
+-            .ok_or(MarginfiError::StaleOracle)?;
++            .ok_or(AstrolendError::StaleOracle)?;
+ 
+         Ok(Self {
+             ema_price: Box::new(ema_price),
+@@ -228,12 +228,12 @@ impl PythLegacyPriceFeed {
+         })
+     }
+ 
+-    fn check_ais(ai: &AccountInfo) -> MarginfiResult {
++    fn check_ais(ai: &AccountInfo) -> AstrolendResult {
+         load_pyth_price_feed(ai)?;
+         Ok(())
+     }
+ 
+-    fn get_confidence_interval(&self, use_ema: bool) -> MarginfiResult<I80F48> {
++    fn get_confidence_interval(&self, use_ema: bool) -> AstrolendResult<I80F48> {
+         let price = if use_ema {
+             &self.ema_price
+         } else {
+@@ -266,12 +266,12 @@ impl PythLegacyPriceFeed {
+     }
+ 
+     #[inline(always)]
+-    fn get_ema_price(&self) -> MarginfiResult<I80F48> {
++    fn get_ema_price(&self) -> AstrolendResult<I80F48> {
+         pyth_price_components_to_i80f48(I80F48::from_num(self.ema_price.price), self.ema_price.expo)
+     }
+ 
+     #[inline(always)]
+-    fn get_unweighted_price(&self) -> MarginfiResult<I80F48> {
++    fn get_unweighted_price(&self) -> AstrolendResult<I80F48> {
+         pyth_price_components_to_i80f48(I80F48::from_num(self.price.price), self.price.expo)
+     }
+ }
+@@ -281,7 +281,7 @@ impl PriceAdapter for PythLegacyPriceFeed {
+         &self,
+         price_type: OraclePriceType,
+         bias: Option<PriceBias>,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let price = match price_type {
+             OraclePriceType::TimeWeighted => self.get_ema_price()?,
+             OraclePriceType::RealTime => self.get_unweighted_price()?,
+@@ -316,21 +316,21 @@ impl SwitchboardPullPriceFeed {
+         ai: &AccountInfo,
+         current_timestamp: i64,
+         max_age: u64,
+-    ) -> MarginfiResult<Self> {
++    ) -> AstrolendResult<Self> {
+         let ai_data = ai.data.borrow();
+ 
+         check!(
+             ai.owner.eq(&SWITCHBOARD_PULL_ID),
+-            MarginfiError::InvalidOracleAccount
++            AstrolendError::InvalidOracleAccount
+         );
+ 
+         let feed =
+-            PullFeedAccountData::parse(ai_data).map_err(|_| MarginfiError::InvalidOracleAccount)?;
++            PullFeedAccountData::parse(ai_data).map_err(|_| AstrolendError::InvalidOracleAccount)?;
+ 
+         // Check staleness
+         let last_updated = feed.last_update_timestamp;
+         if current_timestamp.saturating_sub(last_updated) > max_age as i64 {
+-            return err!(MarginfiError::StaleOracle);
++            return err!(AstrolendError::StaleOracle);
+         }
+ 
+         Ok(Self {
+@@ -338,20 +338,20 @@ impl SwitchboardPullPriceFeed {
+         })
+     }
+ 
+-    fn check_ais(ai: &AccountInfo) -> MarginfiResult {
++    fn check_ais(ai: &AccountInfo) -> AstrolendResult {
+         let ai_data = ai.data.borrow();
+ 
+         check!(
+             ai.owner.eq(&SWITCHBOARD_PULL_ID),
+-            MarginfiError::InvalidOracleAccount
++            AstrolendError::InvalidOracleAccount
+         );
+ 
+-        PullFeedAccountData::parse(ai_data).map_err(|_| MarginfiError::InvalidOracleAccount)?;
++        PullFeedAccountData::parse(ai_data).map_err(|_| AstrolendError::InvalidOracleAccount)?;
+ 
+         Ok(())
+     }
+ 
+-    fn get_price(&self) -> MarginfiResult<I80F48> {
++    fn get_price(&self) -> AstrolendResult<I80F48> {
+         let sw_result = self.feed.result;
+         // Note: Pull oracles support mean (result.mean) or median (result.value)
+         let price: I80F48 = I80F48::from_num(sw_result.value)
+@@ -366,7 +366,7 @@ impl SwitchboardPullPriceFeed {
+         Ok(price)
+     }
+ 
+-    fn get_confidence_interval(&self) -> MarginfiResult<I80F48> {
++    fn get_confidence_interval(&self) -> AstrolendResult<I80F48> {
+         let std_div: I80F48 = I80F48::from_num(self.feed.result.std_dev);
+ 
+         let conf_interval = std_div
+@@ -398,7 +398,7 @@ impl PriceAdapter for SwitchboardPullPriceFeed {
+         &self,
+         _price_type: OraclePriceType,
+         bias: Option<PriceBias>,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let price = self.get_price()?;
+ 
+         match bias {
+@@ -429,54 +429,54 @@ impl SwitchboardV2PriceFeed {
+         ai: &AccountInfo,
+         current_timestamp: i64,
+         max_age: u64,
+-    ) -> MarginfiResult<Self> {
++    ) -> AstrolendResult<Self> {
+         let ai_data = ai.data.borrow();
+ 
+         check!(
+             ai.owner.eq(&SWITCHBOARD_PROGRAM_ID),
+-            MarginfiError::InvalidOracleAccount
++            AstrolendError::InvalidOracleAccount
+         );
+ 
+         let aggregator_account = AggregatorAccountData::new_from_bytes(&ai_data)
+-            .map_err(|_| MarginfiError::InvalidOracleAccount)?;
++            .map_err(|_| AstrolendError::InvalidOracleAccount)?;
+ 
+         aggregator_account
+             .check_staleness(current_timestamp, max_age as i64)
+-            .map_err(|_| MarginfiError::StaleOracle)?;
++            .map_err(|_| AstrolendError::StaleOracle)?;
+ 
+         Ok(Self {
+             aggregator_account: Box::new(aggregator_account.into()),
+         })
+     }
+ 
+-    fn check_ais(ai: &AccountInfo) -> MarginfiResult {
++    fn check_ais(ai: &AccountInfo) -> AstrolendResult {
+         let ai_data = ai.data.borrow();
+ 
+         check!(
+             ai.owner.eq(&SWITCHBOARD_PROGRAM_ID),
+-            MarginfiError::InvalidOracleAccount
++            AstrolendError::InvalidOracleAccount
+         );
+ 
+         AggregatorAccountData::new_from_bytes(&ai_data)
+-            .map_err(|_| MarginfiError::InvalidOracleAccount)?;
++            .map_err(|_| AstrolendError::InvalidOracleAccount)?;
+ 
+         Ok(())
+     }
+ 
+-    fn get_price(&self) -> MarginfiResult<I80F48> {
++    fn get_price(&self) -> AstrolendResult<I80F48> {
+         let sw_decimal = self
+             .aggregator_account
+             .get_result()
+-            .map_err(|_| MarginfiError::InvalidPrice)?;
++            .map_err(|_| AstrolendError::InvalidPrice)?;
+ 
+         Ok(switchboard_decimal_to_i80f48(sw_decimal)
+-            .ok_or(MarginfiError::InvalidSwitchboardDecimalConversion)?)
++            .ok_or(AstrolendError::InvalidSwitchboardDecimalConversion)?)
+     }
+ 
+-    fn get_confidence_interval(&self) -> MarginfiResult<I80F48> {
++    fn get_confidence_interval(&self) -> AstrolendResult<I80F48> {
+         let std_div = self.aggregator_account.latest_confirmed_round_std_deviation;
+         let std_div = switchboard_decimal_to_i80f48(std_div)
+-            .ok_or(MarginfiError::InvalidSwitchboardDecimalConversion)?;
++            .ok_or(AstrolendError::InvalidSwitchboardDecimalConversion)?;
+ 
+         let conf_interval = std_div
+             .checked_mul(STD_DEV_MULTIPLE)
+@@ -507,7 +507,7 @@ impl PriceAdapter for SwitchboardV2PriceFeed {
+         &self,
+         _price_type: OraclePriceType,
+         bias: Option<PriceBias>,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let price = self.get_price()?;
+ 
+         match bias {
+@@ -528,10 +528,10 @@ impl PriceAdapter for SwitchboardV2PriceFeed {
+     }
+ }
+ 
+-pub fn load_price_update_v2_checked(ai: &AccountInfo) -> MarginfiResult<PriceUpdateV2> {
++pub fn load_price_update_v2_checked(ai: &AccountInfo) -> AstrolendResult<PriceUpdateV2> {
+     check!(
+         ai.owner.eq(&pyth_solana_receiver_sdk::id()),
+-        MarginfiError::InvalidOracleAccount
++        AstrolendError::InvalidOracleAccount
+     );
+ 
+     let price_feed_data = ai.try_borrow_data()?;
+@@ -539,7 +539,7 @@ pub fn load_price_update_v2_checked(ai: &AccountInfo) -> MarginfiResult<PriceUpd
+ 
+     check!(
+         discriminator == <PriceUpdateV2 as anchor_lang_29::Discriminator>::DISCRIMINATOR,
+-        MarginfiError::InvalidOracleAccount
++        AstrolendError::InvalidOracleAccount
+     );
+ 
+     Ok(PriceUpdateV2::deserialize(
+@@ -555,7 +555,7 @@ pub struct PythPushOraclePriceFeed {
+ 
+ impl PythPushOraclePriceFeed {
+     /// Pyth push oracles are update using crosschain messages from pythnet
+-    /// There can be multiple pyth push oracles for a given feed_id. Marginfi allows using any
++    /// There can be multiple pyth push oracles for a given feed_id. Astrolend allows using any
+     /// pyth push oracle with a sufficient verification level and price age.
+     ///
+     /// Meaning that when loading the pyth push oracle, we don't verify the account address
+@@ -575,7 +575,7 @@ impl PythPushOraclePriceFeed {
+         feed_id: &FeedId,
+         clock: &Clock,
+         max_age: u64,
+-    ) -> MarginfiResult<Self> {
++    ) -> AstrolendResult<Self> {
+         let price_feed_account = load_price_update_v2_checked(ai)?;
+ 
+         let price = price_feed_account
+@@ -590,9 +590,9 @@ impl PythPushOraclePriceFeed {
+ 
+                 match e {
+                     pyth_solana_receiver_sdk::error::GetPriceError::PriceTooOld => {
+-                        MarginfiError::StaleOracle
++                        AstrolendError::StaleOracle
+                     }
+-                    _ => MarginfiError::InvalidOracleAccount,
++                    _ => AstrolendError::InvalidOracleAccount,
+                 }
+             })?;
+ 
+@@ -620,7 +620,7 @@ impl PythPushOraclePriceFeed {
+     }
+ 
+     #[cfg(feature = "client")]
+-    pub fn load_unchecked(ai: &AccountInfo) -> MarginfiResult<Self> {
++    pub fn load_unchecked(ai: &AccountInfo) -> AstrolendResult<Self> {
+         let price_feed_account = load_price_update_v2_checked(ai)?;
+ 
+         let price = price_feed_account
+@@ -630,9 +630,9 @@ impl PythPushOraclePriceFeed {
+ 
+                 match e {
+                     pyth_solana_receiver_sdk::error::GetPriceError::PriceTooOld => {
+-                        MarginfiError::StaleOracle
++                        AstrolendError::StaleOracle
+                     }
+-                    _ => MarginfiError::InvalidOracleAccount,
++                    _ => AstrolendError::InvalidOracleAccount,
+                 }
+             })?;
+ 
+@@ -660,24 +660,24 @@ impl PythPushOraclePriceFeed {
+     }
+ 
+     #[cfg(feature = "client")]
+-    pub fn peek_feed_id(ai: &AccountInfo) -> MarginfiResult<FeedId> {
++    pub fn peek_feed_id(ai: &AccountInfo) -> AstrolendResult<FeedId> {
+         let price_feed_account = load_price_update_v2_checked(ai)?;
+ 
+         Ok(price_feed_account.price_message.feed_id)
+     }
+ 
+-    pub fn check_ai_and_feed_id(ai: &AccountInfo, feed_id: &FeedId) -> MarginfiResult {
++    pub fn check_ai_and_feed_id(ai: &AccountInfo, feed_id: &FeedId) -> AstrolendResult {
+         let price_feed_account = load_price_update_v2_checked(ai)?;
+ 
+         check!(
+             &price_feed_account.price_message.feed_id.eq(feed_id),
+-            MarginfiError::InvalidOracleAccount
++            AstrolendError::InvalidOracleAccount
+         );
+ 
+         Ok(())
+     }
+ 
+-    fn get_confidence_interval(&self, use_ema: bool) -> MarginfiResult<I80F48> {
++    fn get_confidence_interval(&self, use_ema: bool) -> AstrolendResult<I80F48> {
+         let price = if use_ema {
+             &self.ema_price
+         } else {
+@@ -710,7 +710,7 @@ impl PythPushOraclePriceFeed {
+     }
+ 
+     #[inline(always)]
+-    fn get_ema_price(&self) -> MarginfiResult<I80F48> {
++    fn get_ema_price(&self) -> AstrolendResult<I80F48> {
+         pyth_price_components_to_i80f48(
+             I80F48::from_num(self.ema_price.price),
+             self.ema_price.exponent,
+@@ -718,7 +718,7 @@ impl PythPushOraclePriceFeed {
+     }
+ 
+     #[inline(always)]
+-    fn get_unweighted_price(&self) -> MarginfiResult<I80F48> {
++    fn get_unweighted_price(&self) -> AstrolendResult<I80F48> {
+         pyth_price_components_to_i80f48(I80F48::from_num(self.price.price), self.price.exponent)
+     }
+ 
+@@ -727,8 +727,8 @@ impl PythPushOraclePriceFeed {
+     /// Pyth sponsored feed id
+     /// `constants::PYTH_PUSH_PYTH_SPONSORED_SHARD_ID = 0`
+     ///
+-    /// Marginfi sponsored feed id
+-    /// `constants::PYTH_PUSH_MARGINFI_SPONSORED_SHARD_ID = 3301`
++    /// Astrolend sponsored feed id
++    /// `constants::PYTH_PUSH_ASTROLEND_SPONSORED_SHARD_ID = 3301`
+     pub fn find_oracle_address(shard_id: u16, feed_id: &FeedId) -> (Pubkey, u8) {
+         Pubkey::find_program_address(&[&shard_id.to_le_bytes(), feed_id], &PYTH_PUSH_ORACLE_ID)
+     }
+@@ -739,7 +739,7 @@ impl PriceAdapter for PythPushOraclePriceFeed {
+         &self,
+         price_type: OraclePriceType,
+         bias: Option<PriceBias>,
+-    ) -> MarginfiResult<I80F48> {
++    ) -> AstrolendResult<I80F48> {
+         let price = match price_type {
+             OraclePriceType::TimeWeighted => self.get_ema_price()?,
+             OraclePriceType::RealTime => self.get_unweighted_price()?,
+@@ -845,14 +845,14 @@ impl LiteAggregatorAccountData {
+         let min_oracle_results = self.min_oracle_results;
+         let latest_confirmed_round_num_success = self.latest_confirmed_round_num_success;
+         if min_oracle_results > latest_confirmed_round_num_success {
+-            return Err(MarginfiError::InvalidOracleAccount.into());
++            return Err(AstrolendError::InvalidOracleAccount.into());
+         }
+         Ok(self.latest_confirmed_round_result)
+     }
+ }
+ 
+ #[inline(always)]
+-fn pyth_price_components_to_i80f48(price: I80F48, exponent: i32) -> MarginfiResult<I80F48> {
++fn pyth_price_components_to_i80f48(price: I80F48, exponent: i32) -> AstrolendResult<I80F48> {
+     let scaling_factor = EXP_10_I80F48[exponent.unsigned_abs() as usize];
+ 
+     let price = if exponent == 0 {
+@@ -871,10 +871,10 @@ fn pyth_price_components_to_i80f48(price: I80F48, exponent: i32) -> MarginfiResu
+ }
+ 
+ /// Load and validate a pyth price feed account.
+-fn load_pyth_price_feed(ai: &AccountInfo) -> MarginfiResult<PriceFeed> {
+-    check!(ai.owner.eq(&PYTH_ID), MarginfiError::InvalidOracleAccount);
++fn load_pyth_price_feed(ai: &AccountInfo) -> AstrolendResult<PriceFeed> {
++    check!(ai.owner.eq(&PYTH_ID), AstrolendError::InvalidOracleAccount);
+     let price_feed = SolanaPriceAccount::account_info_to_feed(ai)
+-        .map_err(|_| MarginfiError::InvalidOracleAccount)?;
++        .map_err(|_| AstrolendError::InvalidOracleAccount)?;
+     Ok(price_feed)
+ }
+ 
+diff --git a/results/src/utils.rs b/results/src/utils.rs
+index 32711d6..d1915f7 100755
+--- a/results/src/utils.rs
++++ b/results/src/utils.rs
+@@ -1,7 +1,7 @@
+ use crate::{
+     bank_authority_seed, bank_seed,
+-    state::marginfi_group::{Bank, BankVaultType},
+-    MarginfiError, MarginfiResult,
++    state::astrolend_group::{Bank, BankVaultType},
++    AstrolendError, AstrolendResult,
+ };
+ use anchor_lang::prelude::*;
+ use anchor_spl::{
+@@ -47,7 +47,7 @@ pub fn calculate_pre_fee_spl_deposit_amount(
+     mint_ai: AccountInfo,
+     post_fee_amount: u64,
+     epoch: u64,
+-) -> MarginfiResult<u64> {
++) -> AstrolendResult<u64> {
+     if mint_ai.owner.eq(&Token::id()) {
+         return Ok(post_fee_amount);
+     }
+@@ -69,7 +69,7 @@ pub fn calculate_post_fee_spl_deposit_amount(
+     mint_ai: AccountInfo,
+     input_amount: u64,
+     epoch: u64,
+-) -> MarginfiResult<u64> {
++) -> AstrolendResult<u64> {
+     if mint_ai.owner.eq(&Token::id()) {
+         return Ok(input_amount);
+     }
+@@ -87,12 +87,12 @@ pub fn calculate_post_fee_spl_deposit_amount(
+ 
+     let output_amount = input_amount
+         .checked_sub(fee)
+-        .ok_or(MarginfiError::MathError)?;
++        .ok_or(AstrolendError::MathError)?;
+ 
+     Ok(output_amount)
+ }
+ 
+-pub fn nonzero_fee(mint_ai: AccountInfo, epoch: u64) -> MarginfiResult<bool> {
++pub fn nonzero_fee(mint_ai: AccountInfo, epoch: u64) -> AstrolendResult<bool> {
+     if mint_ai.owner.eq(&Token::id()) {
+         return Ok(false);
+     }
+@@ -118,24 +118,24 @@ pub fn maybe_take_bank_mint<'info>(
+     remaining_accounts: &mut &'info [AccountInfo<'info>],
+     bank: &Bank,
+     token_program: &Pubkey,
+-) -> MarginfiResult<Option<InterfaceAccount<'info, Mint>>> {
++) -> AstrolendResult<Option<InterfaceAccount<'info, Mint>>> {
+     match *token_program {
+         anchor_spl::token::ID => Ok(None),
+         anchor_spl::token_2022::ID => {
+             let (maybe_mint, remaining) = remaining_accounts
+                 .split_first()
+-                .ok_or(MarginfiError::T22MintRequired)?;
++                .ok_or(AstrolendError::T22MintRequired)?;
+             *remaining_accounts = remaining;
+ 
+             if bank.mint != *maybe_mint.key {
+-                return err!(MarginfiError::T22MintRequired);
++                return err!(AstrolendError::T22MintRequired);
+             }
+ 
+             InterfaceAccount::try_from(maybe_mint)
+                 .map(Option::Some)
+                 .map_err(|e| {
+                     msg!("failed to parse mint account: {:?}", e);
+-                    MarginfiError::T22MintRequired.into()
++                    AstrolendError::T22MintRequired.into()
+                 })
+         }
+ 
