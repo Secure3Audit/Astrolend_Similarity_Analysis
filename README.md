@@ -35,8 +35,7 @@ Based on our comparison, we conclude that the source and the target are: **Funct
 The majority of changes are:
 1. File renames
 2. Variable and function renames
-3. Removed security_txt
-4. Remvoed debug level log
+3. Remvoed debug level log
 
 With proper execution, the Astrolend protocol should perform in very similar ways to marginfi-v2. Prior security assessments on source repo and commit can be a good reference. 
 
@@ -87,8 +86,7 @@ Main changes:
 
 1. File renames
 2. Variable and function renames
-3. Removed security_txt
-4. Remvoed debug level log
+3. Remvoed debug level log
 
 Screenshot from Beyond Compare for Reference:
 
